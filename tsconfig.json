@@ -1,0 +1,3 @@
+{
+  "extends": "@jomans-vault/config/tsconfig.base.json"
+}
