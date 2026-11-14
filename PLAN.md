@@ -39,7 +39,7 @@ secret_version     id, secretId → secret, version (int, monotonic per secret),
                    createdByType ("user" | "apiKey"), createdById, createdAt
 project_key        id, projectId → project, wrappedDek (bytea), iv, kekVersion, createdAt, retiredAt
 audit_event        id, projectId, environmentId?, secretId?, action ("secret.read" | "secret.reveal" |
-                   "secret.write" | "secret.delete" | "apikey.create" | …), actorType, actorId,
+                   "secret.export" | "secret.write" | "secret.delete" | "apikey.create" | …), actorType, actorId,
                    ip, userAgent, createdAt   -- never the value
 ```
 
@@ -72,7 +72,7 @@ Every procedure declares `.route({ method, path })` so it appears in the OpenAPI
 | Set (create or overwrite) | `PUT /api/v1/projects/{project}/envs/{env}/secrets/{key}` | Body `{ value, kind?, description? }`. Writes a new version |
 | Update (safe) | `PATCH …/secrets/{key}` | Body `{ value, expectedVersion }`. Returns 409 if someone changed it first |
 | Remove | `DELETE …/secrets/{key}` | Soft delete. Later versions can restore it |
-| Bulk export | `GET …/envs/{env}/export?format=dotenv\|json` | What the CLI and Varlock plugin use to inject a whole environment in one call |
+| Bulk export | `GET …/envs/{env}/export?format=dotenv\|json` | What the CLI and Varlock plugin use to inject a whole environment in one call. Returns plaintext, so it requires the `inject` permission. Audited as `secret.export` |
 | History / rollback | `GET …/secrets/{key}/versions`, `POST …/secrets/{key}/rollback` | Rollback takes `{ version }` |
 | Projects / envs | CRUD under `/api/v1/projects` | Human sessions by default (see §3) |
 
@@ -99,7 +99,7 @@ Then add these middlewares:
 apiKey({ defaultPrefix: "jv_", permissions: { defaultPermissions: { secrets: ["read"] } } })
 ```
 
-- Keys belong to the user who creates them. Permissions use the plugin's `{ resource: actions[] }` shape: `secrets: ["read", "reveal", "write", "delete"]`.
+- Keys belong to the user who creates them. Permissions use the plugin's `{ resource: actions[] }` shape: `secrets: ["read", "reveal", "inject", "write", "delete"]`. Two of these hand plaintext to the caller: `reveal` (one value through `GET …/secrets/{key}`) and `inject` (a whole environment through `/export`). Both are off by default. A key with neither can list keys and write values, but never reads them back.
 - Project and environment scope is stored in the key's metadata, for example `{ projects: { "my-app": ["development"] } }`. `requireScope` enforces it, because the plugin's permission model knows actions but not our projects.
 - Keys are shown once at creation. The plugin stores only a hash. Keys can expire and be revoked from the UI.
 - Run `bun run auth:generate` after adding the plugin, then generate and apply a migration.
@@ -119,7 +119,9 @@ jv run -- bun run dev                 # fetches /export, injects into the child'
 jv get KEY | jv set KEY [value|-] | jv rm KEY | jv ls | jv history KEY
 ```
 
-`jv run` is how agents should normally consume secrets. The values go straight into the process, and the agent never sees them, so they never land in its transcript or context.
+`jv run` is how agents should normally consume secrets. The values go straight into the child process's environment rather than being printed, so they don't end up in the agent's transcript or context by accident.
+
+This is protection against accidental exposure, not a security boundary. The caller chooses the command, so `jv run -- env` (or a script that logs its environment) prints every injected value. `jv run` needs a key with the `inject` permission, and anyone holding that key can read plaintext. Treat the child command as trusted, and give `inject` only to keys whose commands you trust, scoped to the environments they need.
 
 **b) `packages/varlock-plugin`, a new Varlock plugin that registers an `@initJv(...)` root decorator and a `jv()` resolver.** It reuses the CLI's stored credential.
 
@@ -157,7 +159,7 @@ DATABASE_URL=exec(`jv get DATABASE_URL`)
 
 **Extends `apps/fumadocs`**: replace `content/docs/index.mdx` and `test.mdx` with:
 - Quickstart: human.
-- Quickstart: agent, with a copy-paste curl example and a "use `jv run`, don't read values" guideline.
+- Quickstart: agent, with a copy-paste curl example and a "use `jv run`, don't read values" guideline that spells out that `inject` is still plaintext access and only trusted commands should run under it.
 - CLI reference.
 - Varlock plugin.
 - API reference, linked from or embedded via the generated OpenAPI spec.
@@ -176,7 +178,7 @@ DATABASE_URL=exec(`jv get DATABASE_URL`)
 
 There's no test runner in the repo yet. Add `bun test` to `packages/crypto` and `packages/api`, with a small set of tests that would actually go red if something broke:
 - Round-trip: encrypt then decrypt returns the original value, and a tampered ciphertext or IV is rejected (GCM auth).
-- Scope enforcement, as one table-driven test: a key scoped to `my-app/development` gets 403 on `production` and on another project, and a key without `reveal` can list but not get.
+- Scope enforcement, as one table-driven test: a key scoped to `my-app/development` gets 403 on `production` and on another project, a key without `reveal` can list but not get, and a key without `inject` gets 403 on `/export`.
 - `PATCH` with a stale `expectedVersion` returns 409 and doesn't write a version.
 - Delete, then list: the key is gone, and its history is still readable.
 - No value appears in any `audit_event` row.
@@ -186,7 +188,7 @@ The API tests should run against the dockerized Postgres (`bun run db:start`), n
 ## 9. Phases
 
 1. **Core vault**: `packages/crypto`, the vault schema and migrations, the secrets and projects routers, the `/api/v1` OpenAPI route, and the human UI for projects and secrets.
-2. **Agents**: the API key plugin, scopes and `reveal`, the audit log, and the API keys UI.
+2. **Agents**: the API key plugin, scopes, the `reveal` and `inject` permissions, the audit log, and the API keys UI.
 3. **Local dev**: the `apps/cli` `jv` binary (`login`, `link`, `run`, `get`/`set`/`rm`), plus the `exec()` recipe. Dogfood it on this repo.
 4. **Polish**: the Varlock plugin, version rollback UI, docs, and an MCP endpoint (see Q6).
 
@@ -200,9 +202,9 @@ All eight recommendations below were accepted as written. Q8 still has a check t
 |---|---|---|---|
 | Q1 | **Who can access which secrets?** Personal projects only, or teams/orgs from day one? | Personal: each project has one `ownerId`. Add Better Auth's `organization` plugin later | You're the first user. The `requireScope` middleware is the one place that would change, so adding orgs later is cheap. |
 | Q2 | **How do agents authenticate?** | Better Auth API keys scoped to project, environment, and actions, created by a human | It's already in the auth stack, keys are hashed at rest, and expiry and revocation are built in. OAuth client-credentials would be overkill for one owner. |
-| Q3 | **Can agents read plaintext values?** | Only with an explicit `reveal` permission, off by default. Agents consume secrets through `jv run` injection | Anything an agent reads ends up in its context, logs, and transcripts. Injecting values into the process keeps them out. |
+| Q3 | **Can agents read plaintext values?** | Only with an explicit permission, off by default: `reveal` for one value, `inject` for a whole environment (what `jv run` uses). Agents normally consume secrets through `jv run` | Anything an agent reads ends up in its context, logs, and transcripts. Injection avoids accidental exposure, but it doesn't stop an agent that runs `jv run -- env`. So `inject` counts as plaintext access, and should go only to keys whose commands you trust. |
 | Q4 | **How are secrets delivered at local dev time?** | `jv run -- <cmd>` first, then the Varlock `jv()` plugin. Values exist only in process memory | `jv run` works with any tool. The plugin fits this repo's existing Varlock setup and keeps `.env.schema` as the single source. |
 | Q5 | **Where does the master key (KEK) live?** | The `VAULT_MASTER_KEY` env var now, with `kekVersion` in place so a KMS can replace it later | It's simple to self-host, and the rotation path is already in the schema. |
-| Q6 | **Expose an MCP server for agents?** | Yes, in phase 4, as an `apps/web` route over the same routers, offering `list`, `set`, and `run`-style tools but no raw `get` by default | Agents can use REST today, but MCP makes discovery easy. Leaving out raw `get` keeps Q3's guarantee. |
+| Q6 | **Expose an MCP server for agents?** | Yes, in phase 4, as an `apps/web` route over the same routers, offering `list`, `set`, and `run`-style tools but no raw `get` by default | Agents can use REST today, but MCP makes discovery easy. Leaving out raw `get` cuts accidental exposure. The `run` tool still needs `inject`, so the trust caveat in Q3 applies. |
 | Q7 | **Hosting?** | Self-host with the existing `docker-compose.yml` on a box you control | No new infrastructure, and the secrets stay with you. |
 | Q8 | **Where does the CLI keep its credential?** | The OS keychain (Keychain on macOS) via Bun's secrets API. Check that this API exists in Bun 1.4 before relying on it, and fall back to a `0600` file only if it doesn't | This matches the goal of no secrets in local files. |
