@@ -67,6 +67,22 @@ test("preserves entry order, refuses the first unwritable key and writes empty i
   }
 });
 
+test.each(["\n", "\r", "\r\n", "\n \t", "\u2028", "\u2029"])(
+  "exports long blank-line values without repeatedly scanning them (%j)",
+  (lineBreak) => {
+    const repetitions = Math.floor(65_000 / Buffer.byteLength(lineBreak));
+    const value = `'#\n${lineBreak.repeat(repetitions)}#`;
+    expect(Buffer.byteLength(value)).toBeLessThanOrEqual(65_536);
+    const start = performance.now();
+    const document = formatDotenv([
+      { key: "K", value },
+      { key: "NEXT", value: "after" },
+    ]);
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(parse(document)).toEqual({ K: value, NEXT: "after" });
+  }
+);
+
 const shortValues = (maxLength: number): string[] => {
   const alphabet = [
     "a",

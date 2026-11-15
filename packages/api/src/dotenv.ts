@@ -8,10 +8,11 @@ export class DotenvValueError extends Error {
   }
 }
 
-// Private copy of dotenv 17.4.2's LINE expression and parse steps.
+// Private copy of dotenv 17.4.2's parse rules. Leading whitespace stays on
+// one line: blank lines cannot contain keys, so rescanning them is unnecessary.
 const LINE =
-  // oxlint-disable-next-line prefer-named-capture-group, require-unicode-regexp -- Keep the pinned parser's expression unchanged.
-  /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/gm;
+  // oxlint-disable-next-line prefer-named-capture-group, require-unicode-regexp -- Preserve the pinned parser's capture groups and flags.
+  /(?:^|^)[^\S\r\n\u2028\u2029]*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/gm;
 const NORMALIZE_LINE_BREAKS = /\r\n?/gmu;
 // oxlint-disable-next-line prefer-named-capture-group, require-unicode-regexp -- Preserve the pinned parser's quote stripping and backreference.
 const OUTER_QUOTES = /^(['"`])([\s\S]*)\1$/gm;
