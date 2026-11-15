@@ -1,5 +1,5 @@
 import { appRouter } from "@jomans-vault/api/routers/index";
-import { createORPCClient } from "@orpc/client";
+import { ORPCError, createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { createRouterClient } from "@orpc/server";
 import type { RouterClient } from "@orpc/server";
@@ -15,6 +15,9 @@ export const createQueryClient = () =>
   new QueryClient({
     queryCache: new QueryCache({
       onError: (error, query) => {
+        if (error instanceof ORPCError && error.code === "NOT_FOUND") {
+          return;
+        }
         toast.error(`Error: ${error.message}`, {
           action: {
             label: "retry",

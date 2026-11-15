@@ -9,7 +9,7 @@ import {
 } from "@jomans-vault/ui/components/empty";
 import { Skeleton } from "@jomans-vault/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 
 import { NewProjectDialog } from "@/components/new-project-dialog";
 import { orpc } from "@/utils/orpc";
@@ -62,11 +62,17 @@ const ProjectsList = () => {
   return (
     <ul className="divide-y border">
       {projects.data.map((project) => (
-        <li key={project.slug} className="flex min-w-0 flex-col gap-1 p-4">
-          <span className="font-medium wrap-anywhere">{project.name}</span>
-          <span className="text-muted-foreground text-sm wrap-anywhere">
-            {project.slug}
-          </span>
+        <li key={project.slug}>
+          <Link
+            to="/projects/$project"
+            params={{ project: project.slug }}
+            className="focus-visible:outline-ring flex min-w-0 flex-col gap-1 p-4 focus-visible:outline-2"
+          >
+            <span className="font-medium wrap-anywhere">{project.name}</span>
+            <span className="text-muted-foreground text-sm wrap-anywhere">
+              {project.slug}
+            </span>
+          </Link>
         </li>
       ))}
     </ul>

@@ -155,6 +155,7 @@ DATABASE_URL=exec(`jv get DATABASE_URL`)
 
 - `projects/index.tsx`: the project list, with a "new project" button.
 - `projects/$project/$env.tsx`: a secrets table with masked values, click-to-reveal (audited), add/edit/delete, a version history drawer, and an environment switcher.
+  - `projects/$project/route.tsx` supplies the shared layout; `projects/$project/index.tsx` forwards to the first environment.
 - `settings/api-keys.tsx`: create a scoped key (shown once), list keys, revoke.
 - `audit.tsx`: the audit log, filterable by project and actor.
 - `cli/authorize.tsx`: the approval screen for `jv login`.
