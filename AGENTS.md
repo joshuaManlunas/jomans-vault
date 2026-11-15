@@ -130,3 +130,17 @@ Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run
 `/factory run` builds every open GitHub issue labeled `factory` through intake → spec → build → gate → review → GitHub reviews → approve, one PR per issue. State is in `factory/jobs/` (gitignored); `factory/bin/job` is its only writer. Checks: `factory/checks.sh`. How it works: `factory/FACTORY.md`. Dashboard: `cd factory && python3 -m http.server`, then open http://localhost:8000/dashboard.html.
 Each job works in its own git worktree at `.worktrees/<job-id>` (gitignored); tools run from the repo root that don't read `.gitignore` should exclude `.worktrees/`.
 <!-- /factory:section -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain.md`.
