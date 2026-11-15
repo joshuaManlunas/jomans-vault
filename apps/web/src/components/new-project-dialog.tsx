@@ -1,4 +1,3 @@
-import { slug } from "@jomans-vault/api/routers/validation";
 import { Button } from "@jomans-vault/ui/components/button";
 import {
   Dialog,
@@ -19,6 +18,7 @@ import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { z } from "zod";
 
+import { slugField } from "@/lib/slug-field";
 import { orpc } from "@/utils/orpc";
 
 const projectSchema = z.object({
@@ -27,20 +27,7 @@ const projectSchema = z.object({
     .trim()
     .min(1, "Enter a name.")
     .max(100, "Use 100 characters or fewer."),
-  slug: z.string().superRefine((value, context) => {
-    const result = slug.safeParse(value);
-    if (result.success) {
-      return;
-    }
-    const [issue] = result.error.issues;
-    let message = "Use only lowercase letters, digits and hyphens.";
-    if (issue?.code === "too_small") {
-      message = "Enter a slug.";
-    } else if (issue?.code === "too_big") {
-      message = "Use 64 characters or fewer.";
-    }
-    context.addIssue({ code: "custom", message });
-  }),
+  slug: slugField("Enter a slug."),
 });
 
 const suggestSlug = (name: string): string =>
