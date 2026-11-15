@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Map intake's risk and surfaces to the job's agent set, and agents to T3 targets.
+
+Usage: route <job-id>
+       route --target <role> [<job-id>]
+
+`route <job-id>` reads `risk` and `surfaces` from intake.md (through job.json),
+looks them up in config.json's `routing` and `surface_reviewers` tables, and
+records the result in job.json with `job agents`. Prints the agent set.
+
+`route --target <role> [<job-id>]` prints the T3 `delegate_task` target for one
+agent as JSON: {"providerInstanceId", "model", "options"}. Fixed roles (intake,
+spec-writer, builder, approver) come from config.json `roles`; a reviewer
+(`reviewer-<r>`) comes from the job's routed `agents.reviewers`, so it needs the
+job id. Every name resolves through config.json `models`.
+"""
+
+from contextlib import contextmanager
+import fcntl
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+FACTORY = Path(__file__).resolve().parents[1]
+CONFIG = json.loads((FACTORY / "config.json").read_text())
+LOCK = FACTORY / "jobs" / ".config.lock"  # shared with factory/bin/models
+
+
+def die(msg):
+    print(f"route: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def profile(name):
+    p = CONFIG["models"].get(name) or die(
+        f"model {name!r} isn't in config.json models ({', '.join(CONFIG['models'])})")
+    return {"providerInstanceId": p["provider"], "model": p["model"], "options": p.get("options", {})}
+
+
+def target(role, job_id=None):
+    if role in CONFIG["roles"]:
+        return profile(CONFIG["roles"][role])
+    if not role.startswith("reviewer-"):
+        die(f"unknown role {role!r}: use one of {', '.join(CONFIG['roles'])} or reviewer-<r>")
+    job_id or die(f"{role} needs a job id: route --target {role} <job-id>")
+    job = json.loads((FACTORY / "jobs" / job_id / "job.json").read_text())
+    reviewers = (job.get("agents") or {}).get("reviewers") or die(f"route the job first: factory/bin/route {job_id}")
+    name = reviewers.get(role.removeprefix("reviewer-")) or die(f"{job_id} has no {role} ({', '.join(reviewers)})")
+    return profile(name)
+
+
+@contextmanager
+def config_lock():
+    """Held by `models set|reset` while rewriting config.json and by `route`
+    from reading it to recording a job's reviewers, so no profile a job is
+    being routed to gets pruned in between."""
+    LOCK.parent.mkdir(exist_ok=True)
+    with open(LOCK, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def main(argv):
+    if argv[:1] == ["--target"] and len(argv) in (2, 3):
+        print(json.dumps(target(*argv[1:])))
+        return
+    if len(argv) != 1:
+        die("usage: route <job-id> | route --target <role> [<job-id>]")
+    with config_lock():
+        global CONFIG
+        CONFIG = json.loads((FACTORY / "config.json").read_text())
+        route_job(argv[0])
+
+
+def route_job(job_id):
+    job_bin = str(FACTORY / "bin" / "job")
+    res = subprocess.run([job_bin, "sync", job_id], capture_output=True, text=True)
+    if res.returncode != 0:
+        die(res.stderr.strip())
+    job = json.loads((FACTORY / "jobs" / job_id / "job.json").read_text())
+    intake = job["intake"] or die(f"{job_id} has no intake.md")
+    risk = CONFIG["routing"].get(intake["risk"]) or die(
+        f"risk {intake['risk']!r} isn't in config.json routing ({', '.join(CONFIG['routing'])})")
+    reviewers = dict(risk)
+    for surface in intake["surfaces"]:
+        extra = CONFIG["surface_reviewers"].get(surface)
+        if extra is None:
+            die(f"surface {surface!r} isn't in config.json surface_reviewers ({', '.join(CONFIG['surface_reviewers'])})")
+        reviewers.update(extra)
+    for name in reviewers.values():
+        profile(name)
+    agents = {"reviewers": reviewers}
+    res = subprocess.run([job_bin, "agents", job_id, json.dumps(agents)], capture_output=True, text=True)
+    if res.returncode != 0:
+        die(res.stderr.strip())
+    print(f"{job_id}: reviewers " + ", ".join(f"{k} {v}" for k, v in reviewers.items()))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

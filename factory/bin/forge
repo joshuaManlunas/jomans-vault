@@ -1,0 +1,512 @@
+#!/usr/bin/env python3
+"""Source-control host adapter. See factory/FORGE.md for the public interface."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+from urllib.parse import quote, urlencode
+
+
+class Error(Exception):
+    pass
+
+
+def login(author):
+    if isinstance(author, dict):
+        author = author.get("login") or author.get("username")
+    return (author or "unknown").removesuffix("[bot]")
+
+
+def codex_reviewed(body, sha):
+    """The summary marker is shared by GitHub comments and GitLab notes."""
+    for marker in re.finditer(r"codex-review-state:v1\s+", body or ""):
+        try:
+            state, _ = json.JSONDecoder().raw_decode(body[marker.end():])
+        except json.JSONDecodeError:
+            continue
+        review = state.get("code_review") if isinstance(state, dict) else None
+        if isinstance(review, dict) and review.get("commit_sha") == sha and review.get("status") == "completed":
+            return True
+    return False
+
+
+class Forge:
+    def __init__(self, config, repo_root):
+        self.config = config
+        self.root = Path(repo_root)
+        self.host = config.get("host")
+        self.project = config.get("project")
+
+    def run(self, args, env=None):
+        try:
+            result = subprocess.run(args, cwd=self.root, env=env, capture_output=True, text=True)
+        except OSError as exc:
+            raise Error(str(exc)) from exc
+        if result.returncode:
+            raise Error(f"`{' '.join(args)}` failed: {(result.stderr or result.stdout).strip()}")
+        return result.stdout
+
+    def issue_link_child(self, parent, child):
+        try:
+            self._link_child(parent, child)
+        except Error as exc:
+            print(f"note: couldn't link #{child} as a sub-issue: {exc}", file=sys.stderr)
+
+    def bot_reviewed(self, number, bot, sha):
+        return {"reviewed": login(bot) in self.bots_reviewed(number, sha)}
+
+
+class GitHub(Forge):
+    def gh(self, *args):
+        env = os.environ.copy()
+        if self.project:
+            env["GH_REPO"] = f"{self.host or 'github.com'}/{self.project}"
+        if self.host:
+            env["GH_HOST"] = self.host
+        return self.run(["gh", *args], env)
+
+    def gh_json(self, *args):
+        return json.loads(self.gh(*args))
+
+    def project_path(self):
+        if not self.project:
+            self.project = self.gh_json("repo", "view", "--json", "nameWithOwner")["nameWithOwner"]
+        return self.project
+
+    def whoami(self):
+        return {"login": login(self.gh("api", "user", "--jq", ".login").strip())}
+
+    def repo(self):
+        data = self.gh_json("api", "repos/{owner}/{repo}")
+        return {"project": data["full_name"], "url": data["html_url"],
+                "default_branch": data["default_branch"],
+                "merge_methods": [m for m, key in [("merge", "allow_merge_commit"),
+                                  ("squash", "allow_squash_merge"), ("rebase", "allow_rebase_merge")]
+                                  if data.get(key)],
+                "can_push": bool((data.get("permissions") or {}).get("push"))}
+
+    def issue_list(self, label, state="open"):
+        return self.gh_json("issue", "list", "--label", label, "--state", state,
+                            "--limit", "200", "--json", "number,title")
+
+    def issue_view(self, number):
+        data = self.gh_json("issue", "view", str(number), "--json",
+                            "number,title,body,author,labels,state,url,comments")
+        return {**data, "author": login(data["author"]),
+                "labels": [label["name"] for label in data["labels"]],
+                "comments": [{"author": login(c["author"]), "body": c["body"],
+                              "created_at": c["createdAt"]} for c in data["comments"]]}
+
+    def created(self, url):
+        match = re.search(r"/(?:issues|pull)/(\d+)/?$", url.strip())
+        if not match:
+            raise Error(f"couldn't parse the created issue/PR URL: {url.strip()}")
+        return {"number": int(match[1]), "url": url.strip()}
+
+    def issue_create(self, title, labels, body):
+        args = ["issue", "create"]
+        for label in labels:
+            args += ["--label", label]
+        return self.created(self.gh(*args, "--title", title, "--body", body))
+
+    def issue_comment(self, number, body):
+        self.gh("issue", "comment", str(number), "--body", body)
+
+    def issue_labels(self, number, add=None, remove=None):
+        args = ["issue", "edit", str(number)]
+        if add:
+            args += ["--add-label", add]
+        if remove:
+            args += ["--remove-label", remove]
+        self.gh(*args)
+
+    def issue_close(self, number):
+        self.gh("issue", "close", str(number))
+
+    def _link_child(self, parent, child):
+        endpoint = "repos/{owner}/{repo}/issues"
+        child_id = self.gh("api", f"{endpoint}/{child}", "--jq", ".id").strip()
+        self.gh("api", f"{endpoint}/{parent}/sub_issues", "-X", "POST", "-F", f"sub_issue_id={child_id}")
+
+    def label_ensure(self, name, color, description):
+        pages = self.gh_json("api", "repos/{owner}/{repo}/labels", "--paginate", "--slurp")
+        labels = [label for page in pages for label in page]
+        if not any(label["name"] == name for label in labels):
+            self.gh("label", "create", name, "--color", color.lstrip("#"), "--description", description)
+
+    def pr_for_branch(self, branch, state="open", fields=None):
+        return self.gh_json("pr", "list", "--head", branch, "--state", state,
+                            "--json", ",".join(fields or ["number", "url", "state"]))
+
+    def pr_view(self, number, fields=None):
+        # Internal projections preserve the existing job's exact CLI requests.
+        names = {"number": "number", "url": "url", "state": "state", "draft": "isDraft",
+                 "head_sha": "headRefOid", "head_branch": "headRefName", "base_branch": "baseRefName"}
+        fields = fields or list(names)
+        data = self.gh_json("pr", "view", str(number), "--json", ",".join(names[f] for f in fields))
+        return {f: data[names[f]] for f in fields}
+
+    def pr_create(self, base, head, title, body, draft=False):
+        args = ["pr", "create", "--base", base, "--head", head, "--title", title, "--body", body]
+        if draft:
+            args.append("--draft")
+        return self.created(self.gh(*args))
+
+    def pr_ready(self, number, *, draft=None):
+        if draft is None:
+            draft = self.pr_view(number, ["draft"])["draft"]
+        if draft:
+            self.gh("pr", "ready", str(number))
+
+    def pr_comment(self, number, body):
+        self.gh("pr", "comment", str(number), "--body", body)
+
+    def pr_merge(self, number, method):
+        self.gh("pr", "merge", str(number), f"--{method}")
+
+    def pr_close(self, number):
+        self.gh("pr", "close", str(number))
+
+    def nodes(self, number, connection, fields):
+        owner, repo = self.project_path().split("/", 1)
+        query = """query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          CONNECTION(first: 100, after: $cursor) {
+            nodes { FIELDS }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }""".replace("CONNECTION", connection).replace("FIELDS", fields)
+        nodes, cursor = [], None
+        while True:
+            args = ["api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}",
+                    "-f", f"repo={repo}", "-F", f"number={number}"]
+            if cursor is not None:
+                args += ["-f", f"cursor={cursor}"]
+            result = self.gh_json(*args)
+            if result.get("errors"):
+                raise Error(f"review bots query failed: {result['errors']}")
+            page = result["data"]["repository"]["pullRequest"][connection]
+            nodes.extend(page["nodes"])
+            if not page["pageInfo"]["hasNextPage"]:
+                return nodes
+            cursor = page["pageInfo"]["endCursor"]
+
+    def bots_reviewed(self, number, sha):
+        reviewed = {login(r["author"]) for r in self.nodes(number, "reviews", "author { login } state commit { oid }")
+                    if (r.get("commit") or {}).get("oid") == sha}
+        for comment in self.nodes(number, "comments", "author { login } body"):
+            if codex_reviewed(comment["body"], sha):
+                reviewed.add(login(comment["author"]))
+        return reviewed
+
+    def threads(self, number, unresolved=False):
+        threads = []
+        for thread in self.nodes(number, "reviewThreads",
+                "id isResolved path line comments(first: 1) { nodes { author { login } body url } }"):
+            if unresolved and thread["isResolved"]:
+                continue
+            comments = thread["comments"]["nodes"]
+            c = comments[0] if comments else {}
+            match = re.search(r"#discussion_r(\d+)", c.get("url", ""))
+            threads.append({"id": thread["id"], "resolved": thread["isResolved"],
+                            "path": thread["path"], "line": thread["line"], "author": login(c.get("author")),
+                            "body": c.get("body", ""), "url": c.get("url", ""),
+                            "comment_id": int(match[1]) if match else None})
+        return threads
+
+    def mutate_thread(self, query, **fields):
+        args = ["api", "graphql", "-f", f"query={query}"]
+        for key, value in fields.items():
+            args += ["-f", f"{key}={value}"]
+        result = self.gh_json(*args)
+        if result.get("errors"):
+            raise Error(f"review thread update failed: {result['errors']}")
+
+    def thread_reply(self, number, thread_id, body):
+        self.mutate_thread("""mutation($id: ID!, $body: String!) {
+          addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $id, body: $body}) {
+            comment { id }
+          }
+        }""", id=thread_id, body=body)
+
+    def thread_resolve(self, number, thread_id):
+        self.mutate_thread("""mutation($id: ID!) {
+          resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
+        }""", id=thread_id)
+
+
+class GitLab(Forge):
+    def __init__(self, config, repo_root):
+        super().__init__(config, repo_root)
+        self.host = self.host or "gitlab.com"
+        if not self.project:
+            raise Error("GitLab forge requires project")
+        self.endpoint = "projects/" + quote(self.project, safe="")
+
+    def api(self, path, method="GET", *, paginate=False, **fields):
+        args = ["glab", "api", path, "--hostname", self.host, "-X", method]
+        if paginate:
+            args.append("--paginate")
+        for key, value in fields.items():
+            if isinstance(value, bool):
+                args += ["-F", f"{key}={str(value).lower()}"]
+            else:
+                # Raw fields keep @mentions, numeric titles and JSON-looking bodies literal.
+                args += ["-f", f"{key}={value}"]
+        output = self.run(args)
+        if not output.strip():
+            return None
+        # Accept a single aggregated array and older glab's concatenated pages.
+        pages, rest = [], output.strip()
+        while rest:
+            value, end = json.JSONDecoder().raw_decode(rest)
+            pages.append(value)
+            rest = rest[end:].lstrip()
+        if len(pages) == 1:
+            return pages[0]
+        return [item for page in pages for item in page]
+
+    def whoami(self):
+        return {"login": login(self.api("user"))}
+
+    def repo(self):
+        data = self.api(self.endpoint)
+        # GitLab chooses the history strategy per project, not per merge.
+        methods = []
+        if data.get("squash_option") != "always":
+            methods.append("rebase" if data["merge_method"] == "ff" else "merge")
+        if data.get("squash_option") != "never":
+            methods.append("squash")
+        permissions = data.get("permissions") or {}
+        access = max((permissions.get(key) or {}).get("access_level", 0)
+                     for key in ("project_access", "group_access"))
+        return {"project": data["path_with_namespace"], "url": data["web_url"],
+                "default_branch": data["default_branch"], "merge_methods": methods, "can_push": access >= 30}
+
+    @staticmethod
+    def state(data):
+        return {"opened": "OPEN", "locked": "OPEN", "merged": "MERGED", "closed": "CLOSED"}[data["state"]]
+
+    @staticmethod
+    def created(data):
+        return {"number": data["iid"], "url": data["web_url"]}
+
+    def issue_list(self, label, state="open"):
+        path = self.endpoint + "/issues?" + urlencode({"labels": label, "state": "opened" if state == "open" else state})
+        return [{"number": i["iid"], "title": i["title"]} for i in self.api(path, paginate=True)]
+
+    def issue_view(self, number):
+        path = f"{self.endpoint}/issues/{number}"
+        data = self.api(path)
+        notes = self.api(path + "/notes?sort=asc&order_by=created_at", paginate=True)
+        return {**self.created(data), "title": data["title"], "body": data.get("description") or "",
+                "author": login(data["author"]), "labels": data["labels"], "state": self.state(data),
+                "comments": [{"author": login(n["author"]), "body": n["body"], "created_at": n["created_at"]}
+                             for n in notes if not n.get("system")]}
+
+    def issue_create(self, title, labels, body):
+        return self.created(self.api(self.endpoint + "/issues", "POST", title=title,
+                                     labels=",".join(labels), description=body))
+
+    def issue_comment(self, number, body):
+        self.api(f"{self.endpoint}/issues/{number}/notes", "POST", body=body)
+
+    def issue_labels(self, number, add=None, remove=None):
+        fields = {}
+        if add:
+            fields["add_labels"] = add
+        if remove:
+            fields["remove_labels"] = remove
+        if fields:
+            self.api(f"{self.endpoint}/issues/{number}", "PUT", **fields)
+
+    def issue_close(self, number):
+        self.api(f"{self.endpoint}/issues/{number}", "PUT", state_event="close")
+
+    def _link_child(self, parent, child):
+        self.api(f"{self.endpoint}/issues/{parent}/links", "POST",
+                 target_project_id=self.project, target_issue_iid=child, link_type="relates_to")
+
+    def label_ensure(self, name, color, description):
+        labels = self.api(self.endpoint + "/labels", paginate=True)
+        if not any(label["name"] == name for label in labels):
+            self.api(self.endpoint + "/labels", "POST", name=name, color="#" + color.lstrip("#"), description=description)
+
+    def pr_for_branch(self, branch, state="open", fields=None):
+        path = self.endpoint + "/merge_requests?" + urlencode({"source_branch": branch, "state": "opened" if state == "open" else state})
+        results = [{**self.created(m), "state": self.state(m)} for m in self.api(path, paginate=True)]
+        return [{f: result[f] for f in fields} for result in results] if fields else results
+
+    def pr_view(self, number, fields=None):
+        data = self.api(f"{self.endpoint}/merge_requests/{number}")
+        result = {**self.created(data), "state": self.state(data),
+                  "draft": bool(data.get("draft") or data.get("work_in_progress")),
+                  "head_sha": data.get("sha") or (data.get("diff_refs") or {}).get("head_sha"),
+                  "head_branch": data["source_branch"], "base_branch": data["target_branch"]}
+        return {f: result[f] for f in fields} if fields else result
+
+    def pr_create(self, base, head, title, body, draft=False):
+        if draft and not re.match(r"^(?:draft:|\[draft\]|\(draft\))", title, re.I):
+            title = "Draft: " + title
+        return self.created(self.api(self.endpoint + "/merge_requests", "POST", target_branch=base,
+                                     source_branch=head, title=title, description=body))
+
+    def pr_ready(self, number, *, draft=None):
+        path = f"{self.endpoint}/merge_requests/{number}"
+        data = self.api(path)
+        if data.get("draft") or data.get("work_in_progress"):
+            title = re.sub(r"^(?:(?:draft|wip):\s*|\[(?:draft|wip)\]\s*|\((?:draft|wip)\)\s*)+", "", data["title"], flags=re.I)
+            self.api(path, "PUT", title=title)
+
+    def pr_comment(self, number, body):
+        self.api(f"{self.endpoint}/merge_requests/{number}/notes", "POST", body=body)
+
+    def pr_merge(self, number, method):
+        repo = self.repo()
+        if method not in repo["merge_methods"]:
+            raise Error(f"merge method {method} is unavailable on this project; allowed: {', '.join(repo['merge_methods'])}")
+        head = self.pr_view(number, ["head_sha"])["head_sha"]
+        result = self.api(f"{self.endpoint}/merge_requests/{number}/merge", "PUT", squash=method == "squash", sha=head)
+        if result.get("state") != "merged":
+            raise Error(f"the forge did not merge PR #{number}: {result.get('merge_error') or result.get('state')}")
+
+    def pr_close(self, number):
+        self.api(f"{self.endpoint}/merge_requests/{number}", "PUT", state_event="close")
+
+    def discussions(self, number):
+        return self.api(f"{self.endpoint}/merge_requests/{number}/discussions", paginate=True)
+
+    def threads(self, number, unresolved=False):
+        threads = []
+        for discussion in self.discussions(number):
+            notes = [n for n in discussion["notes"] if n.get("resolvable") and not n.get("system")]
+            if not notes:
+                continue
+            resolved = all(n.get("resolved", False) for n in notes)
+            if unresolved and resolved:
+                continue
+            note = notes[0]
+            position = note.get("position") or {}
+            threads.append({"id": discussion["id"], "resolved": resolved,
+                            "path": position.get("new_path") or position.get("old_path"),
+                            "line": position.get("new_line") or position.get("old_line"),
+                            "author": login(note["author"]), "body": note["body"],
+                            "url": f"https://{self.host}/{self.project}/-/merge_requests/{number}#note_{note['id']}",
+                            "comment_id": note["id"]})
+        return threads
+
+    def thread_reply(self, number, thread_id, body):
+        self.api(f"{self.endpoint}/merge_requests/{number}/discussions/{quote(thread_id, safe='')}/notes", "POST", body=body)
+
+    def thread_resolve(self, number, thread_id):
+        self.api(f"{self.endpoint}/merge_requests/{number}/discussions/{quote(thread_id, safe='')}", "PUT", resolved=True)
+
+    def bots_reviewed(self, number, sha):
+        """Bots whose notes are tied to this exact commit.
+
+        A note's timestamp proves nothing: a late review of the previous commit
+        can land after a newer commit was made. So a note counts only when it
+        names the commit: a diff note positioned on it, Codex's review-state
+        marker for it, or a body that quotes the SHA (8+ characters).
+        """
+        notes = self.api(f"{self.endpoint}/merge_requests/{number}/notes", paginate=True)
+        notes += [n for d in self.discussions(number) for n in d["notes"]]
+        reviewed = set()
+        for note in notes:
+            if note.get("system"):
+                continue
+            position = note.get("position")
+            body = note["body"] or ""
+            # A Codex state marker carries the SHA even while pending: its status decides.
+            named = codex_reviewed(body, sha) if "codex-review-state:v1" in body else names_commit(body, sha)
+            if (position and position.get("head_sha") == sha) or named:
+                reviewed.add(login(note["author"]))
+        return reviewed
+
+
+def names_commit(body, sha):
+    """True when the text quotes this commit's SHA, at least 8 characters long."""
+    return any(sha.startswith(token.lower())
+               for token in re.findall(r"\b[0-9a-fA-F]{8,40}\b", body or ""))
+
+
+def load(config, repo_root):
+    settings = config.get("forge") or {"type": "github"}
+    backend = {"github": GitHub, "gitlab": GitLab}.get(settings.get("type", "github"))
+    if backend is None:
+        raise Error(f"unknown forge type: {settings.get('type')}")
+    return backend(settings, repo_root)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("whoami", "repo"):
+        commands.add_parser(name)
+    p = commands.add_parser("issue-list")
+    p.add_argument("--label", required=True)
+    p.add_argument("--state", default="open", choices=("open", "closed", "all"))
+    for name in ("issue-view", "issue-comment", "issue-close", "pr-view", "pr-ready", "pr-comment", "pr-close"):
+        p = commands.add_parser(name)
+        p.add_argument("number", type=int)
+    p = commands.add_parser("issue-create")
+    p.add_argument("--title", required=True)
+    p.add_argument("--label", action="append", default=[])
+    p = commands.add_parser("issue-labels")
+    p.add_argument("number", type=int)
+    p.add_argument("--add")
+    p.add_argument("--remove")
+    p = commands.add_parser("issue-link-child")
+    p.add_argument("parent", type=int)
+    p.add_argument("child", type=int)
+    p = commands.add_parser("label-ensure")
+    for name in ("name", "color", "description"):
+        p.add_argument(name)
+    p = commands.add_parser("pr-for-branch")
+    p.add_argument("branch")
+    p.add_argument("--state", choices=("open", "all"), default="open")
+    p = commands.add_parser("pr-create")
+    for name in ("base", "head", "title"):
+        p.add_argument("--" + name, required=True)
+    p.add_argument("--draft", action="store_true")
+    p = commands.add_parser("pr-merge")
+    p.add_argument("number", type=int)
+    p.add_argument("--method", choices=("merge", "squash", "rebase"), required=True)
+    p = commands.add_parser("threads")
+    p.add_argument("number", type=int)
+    p.add_argument("--unresolved", action="store_true")
+    for name in ("thread-reply", "thread-resolve"):
+        p = commands.add_parser(name)
+        p.add_argument("number", type=int)
+        p.add_argument("thread_id")
+    p = commands.add_parser("bot-reviewed")
+    p.add_argument("number", type=int)
+    p.add_argument("bot")
+    p.add_argument("sha")
+    args = vars(parser.parse_args(argv))
+    command = args.pop("command").replace("-", "_")
+    if command in {"issue_create", "issue_comment", "pr_create", "pr_comment", "thread_reply"}:
+        args["body"] = sys.stdin.read()
+    if command == "issue_create":
+        args["labels"] = args.pop("label")
+    root = Path(__file__).resolve().parents[2]
+    try:
+        forge = load(json.loads((root / "factory/config.json").read_text()), root)
+        result = getattr(forge, command)(**args)
+        if result is not None:
+            print(json.dumps(result))
+    except (Error, ValueError, KeyError) as exc:
+        print(f"forge: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

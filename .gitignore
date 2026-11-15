@@ -56,3 +56,8 @@ coverage
 .cache
 tmp
 temp
+/factory/jobs/
+/.worktrees/
+
+# Python bytecode (factory checks)
+__pycache__/
