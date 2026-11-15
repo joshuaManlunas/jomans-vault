@@ -7,7 +7,7 @@ An online secret store, inspired by HashiCorp Vault, used by agents and humans a
 Better-T-Stack monorepo (Bun 1.4.4, Turborepo, TanStack Start, oRPC, Drizzle + Postgres 18, Better Auth 1.7.12, Varlock, Ultracite).
 
 | Piece | Where | What it does today |
-|---|---|---|
+| --- | --- | --- |
 | Web app + server | `apps/web` | TanStack Start. Mounts Better Auth at `src/routes/api/auth/$.ts` and oRPC at `src/routes/api/rpc/$.ts` (an RPC handler, plus an OpenAPI handler under `/api/rpc/api-reference`). The `_auth/` route group redirects to `/login` when there's no session. |
 | API layer | `packages/api` | `publicProcedure` and `protectedProcedure`, which requires a session. The router has only `healthCheck` and `privateData`. Context is `{ session, db }`. |
 | Auth | `packages/auth` | `createAuth()`: email and password, Drizzle adapter, `tanstackStartCookies`. No plugins for machine auth yet. |
@@ -46,6 +46,7 @@ audit_event        id, projectId, environmentId?, secretId?, action ("secret.rea
 The `apikey` table comes from the Better Auth API key plugin (see §3). It's generated into `packages/db/src/schema/auth.ts` by the existing `bun run auth:generate` script, not written by hand.
 
 **Encryption (envelope).**
+
 - One data encryption key (DEK) per project. The DEK is stored only in wrapped form in `project_key`.
 - A key encryption key (KEK) wraps the DEKs. It comes from a new `VAULT_MASTER_KEY` item in `apps/web/.env.schema` (`@sensitive`, 32 bytes, base64).
 - Values are encrypted with AES-256-GCM using Web Crypto (built into Bun and Node, so no new dependency).
@@ -66,7 +67,7 @@ The `apikey` table comes from the Better Auth API key plugin (see §3). It's gen
 Every procedure declares `.route({ method, path })` so it appears in the OpenAPI spec:
 
 | Operation | Method and path | Notes |
-|---|---|---|
+| --- | --- | --- |
 | List keys | `GET /api/v1/projects/{project}/envs/{env}/secrets` | Returns keys, kind, version, and updatedAt only, never values |
 | Get one | `GET /api/v1/projects/{project}/envs/{env}/secrets/{key}` | Returns `{ key, value, version }`. Requires the `reveal` permission. Audited as `secret.reveal` |
 | Set (create or overwrite) | `PUT /api/v1/projects/{project}/envs/{env}/secrets/{key}` | Body `{ value, kind?, description? }`. Writes a new version |
@@ -79,10 +80,12 @@ Every procedure declares `.route({ method, path })` so it appears in the OpenAPI
 Zod input schemas define the shape of a key: `^[A-Z_][A-Z0-9_]*$`, plus a maximum value size. They feed both validation and the generated OpenAPI spec.
 
 **Changes to `packages/api/src/index.ts` and `context.ts`.** Replace `session: Session | null` with a `principal`:
+
 - `{ type: "user", user }`, or
 - `{ type: "apiKey", keyId, userId, scopes }`.
 
 Then add these middlewares:
+
 - `authedProcedure`: the caller is either a user or an API key.
 - `requireScope(project, env, action)`: checks the key's scope (or the user's ownership) for the project or environment named in the input.
 - `audit(action)`: writes an `audit_event` after the handler succeeds.
@@ -96,7 +99,10 @@ Then add these middlewares:
 **Agents and the CLI (new):** in `packages/auth`, add the Better Auth API key plugin (`@better-auth/api-key`, pinned to the same 1.7.x as `better-auth`) and register it in `createAuth()`.
 
 ```ts
-apiKey({ defaultPrefix: "jv_", permissions: { defaultPermissions: { secrets: ["read"] } } })
+apiKey({
+  defaultPrefix: "jv_",
+  permissions: { defaultPermissions: { secrets: ["read"] } },
+});
 ```
 
 - Keys belong to the user who creates them. Permissions use the plugin's `{ resource: actions[] }` shape: `secrets: ["read", "reveal", "inject", "write", "delete"]`. Two of these hand plaintext to the caller: `reveal` (one value through `GET …/secrets/{key}`) and `inject` (a whole environment through `/export`). Both are off by default. A key with neither can list keys and write values, but never reads them back.
@@ -158,6 +164,7 @@ DATABASE_URL=exec(`jv get DATABASE_URL`)
 ## 6. Docs
 
 **Extends `apps/fumadocs`**: replace `content/docs/index.mdx` and `test.mdx` with:
+
 - Quickstart: human.
 - Quickstart: agent, with a copy-paste curl example and a "use `jv run`, don't read values" guideline that spells out that `inject` is still plaintext access and only trusted commands should run under it.
 - CLI reference.
@@ -168,6 +175,7 @@ DATABASE_URL=exec(`jv get DATABASE_URL`)
 ## 7. Deployment
 
 **Extends `docker-compose.yml`**:
+
 - Pass `VAULT_MASTER_KEY` to `web`.
 - Keep Postgres unexposed in production (port 5432 is published today for local dev).
 - Document backups. A lost KEK means every stored value is lost.
@@ -177,6 +185,7 @@ DATABASE_URL=exec(`jv get DATABASE_URL`)
 ## 8. Testing
 
 There's no test runner in the repo yet. Add `bun test` to `packages/crypto` and `packages/api`, with a small set of tests that would actually go red if something broke:
+
 - Round-trip: encrypt then decrypt returns the original value, and a tampered ciphertext or IV is rejected (GCM auth).
 - Scope enforcement, as one table-driven test: a key scoped to `my-app/development` gets 403 on `production` and on another project, a key without `reveal` can list but not get, and a key without `inject` gets 403 on `/export`.
 - `PATCH` with a stale `expectedVersion` returns 409 and doesn't write a version.
@@ -199,7 +208,7 @@ The API tests should run against the dockerized Postgres (`bun run db:start`), n
 All eight recommendations below were accepted as written. Q8 still has a check to do before the CLI is built.
 
 | # | Question | Decision | Why |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Q1 | **Who can access which secrets?** Personal projects only, or teams/orgs from day one? | Personal: each project has one `ownerId`. Add Better Auth's `organization` plugin later | You're the first user. The `requireScope` middleware is the one place that would change, so adding orgs later is cheap. |
 | Q2 | **How do agents authenticate?** | Better Auth API keys scoped to project, environment, and actions, created by a human | It's already in the auth stack, keys are hashed at rest, and expiry and revocation are built in. OAuth client-credentials would be overkill for one owner. |
 | Q3 | **Can agents read plaintext values?** | Only with an explicit permission, off by default: `reveal` for one value, `inject` for a whole environment (what `jv run` uses). Agents normally consume secrets through `jv run` | Anything an agent reads ends up in its context, logs, and transcripts. Injection avoids accidental exposure, but it doesn't stop an agent that runs `jv run -- env`. So `inject` counts as plaintext access, and should go only to keys whose commands you trust. |
