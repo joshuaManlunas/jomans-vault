@@ -6,6 +6,12 @@ export const slug = z
   .max(64)
   .regex(/^[a-z0-9-]+$/u);
 
+export const secretKey = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[A-Z_][A-Z0-9_]*$/u);
+
 export const isUniqueViolation = (
   error: unknown,
   constraint: string

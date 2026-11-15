@@ -1,0 +1,600 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "b6548fe1-98ab-49b8-b1b7-3d1b9bd2de19",
+  "prevIds": [
+    "e3cca893-3875-433f-b0e1-c6793832100d"
+  ],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": [
+        "table",
+        "public",
+        "secret"
+      ],
+      "writes": [
+        "s|tbl|public.secret",
+        "n|tbl|public.secret",
+        "e|tbl|public.secret",
+        "n|rel|public.secret",
+        "n|type|public.secret",
+        "n|rel|public.secret_pkey"
+      ],
+      "reads": [
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "create_table",
+      "statementTarget": [
+        "table",
+        "public",
+        "secret_version"
+      ],
+      "writes": [
+        "s|tbl|public.secret_version",
+        "n|tbl|public.secret_version",
+        "e|tbl|public.secret_version",
+        "n|rel|public.secret_version",
+        "n|type|public.secret_version",
+        "n|rel|public.secret_version_pkey"
+      ],
+      "reads": [
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "secret",
+        "secret_environment_id_key_live_unique"
+      ],
+      "writes": [
+        "s|idx|public.secret_environment_id_key_live_unique",
+        "n|idx|public.secret_environment_id_key_live_unique",
+        "e|idx|public.secret_environment_id_key_live_unique",
+        "n|rel|public.secret_environment_id_key_live_unique"
+      ],
+      "reads": [
+        "n|tbl|public.secret",
+        "n|sch|public",
+        "n|col|public.secret.environment_id",
+        "n|col|public.secret.key"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "secret_version",
+        "secret_version_secret_id_version_unique"
+      ],
+      "writes": [
+        "s|idx|public.secret_version_secret_id_version_unique",
+        "n|idx|public.secret_version_secret_id_version_unique",
+        "e|idx|public.secret_version_secret_id_version_unique",
+        "n|rel|public.secret_version_secret_id_version_unique"
+      ],
+      "reads": [
+        "n|tbl|public.secret_version",
+        "n|sch|public",
+        "n|col|public.secret_version.secret_id",
+        "n|col|public.secret_version.version"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "secret"
+      ],
+      "writes": [
+        "s|fk|public.secret.secret_environment_id_environment_id_fkey",
+        "n|fk|public.secret.secret_environment_id_environment_id_fkey",
+        "e|fk|public.secret.secret_environment_id_environment_id_fkey",
+        "n|con|public.secret.secret_environment_id_environment_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.secret",
+        "n|sch|public",
+        "n|tbl|public.environment",
+        "n|sch|public",
+        "n|col|public.secret.environment_id",
+        "n|col|public.environment.id",
+        "e|uniqueness|public.environment.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "secret"
+      ],
+      "writes": [
+        "s|fk|public.secret.secret_current_version_id_secret_version_id_fkey",
+        "n|fk|public.secret.secret_current_version_id_secret_version_id_fkey",
+        "e|fk|public.secret.secret_current_version_id_secret_version_id_fkey",
+        "n|con|public.secret.secret_current_version_id_secret_version_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.secret",
+        "n|sch|public",
+        "n|tbl|public.secret_version",
+        "n|sch|public",
+        "n|col|public.secret.current_version_id",
+        "n|col|public.secret_version.id",
+        "e|uniqueness|public.secret_version.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "secret_version"
+      ],
+      "writes": [
+        "s|fk|public.secret_version.secret_version_secret_id_secret_id_fkey",
+        "n|fk|public.secret_version.secret_version_secret_id_secret_id_fkey",
+        "e|fk|public.secret_version.secret_version_secret_id_secret_id_fkey",
+        "n|con|public.secret_version.secret_version_secret_id_secret_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.secret_version",
+        "n|sch|public",
+        "n|tbl|public.secret",
+        "n|sch|public",
+        "n|col|public.secret_version.secret_id",
+        "n|col|public.secret.id",
+        "e|uniqueness|public.secret.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "secret",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "secret_version",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "environment_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "key",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "kind",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "description",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "current_version_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "deleted_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "updated_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "secret_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "version",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "ciphertext",
+        "type": "bytea",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "iv",
+        "type": "bytea",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "created_by_type",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "created_by_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "created_at",
+        "type": "timestamp",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "secret_environment_id_key_live_unique",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "environment_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "key",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": true,
+        "where": "\"deleted_at\" IS NULL",
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "secret_version_secret_id_version_unique",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "secret_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "version",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": true,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "secret_environment_id_environment_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "environment_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "environment",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "secret_current_version_id_secret_version_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "current_version_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "secret_version",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "secret_version_secret_id_secret_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "secret_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "secret",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret",
+        "name": "secret_pkey",
+        "columns": [
+          "id"
+        ],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "secret_version",
+        "name": "secret_version_pkey",
+        "columns": [
+          "id"
+        ],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    }
+  ]
+}
