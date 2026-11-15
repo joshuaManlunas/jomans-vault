@@ -13,6 +13,7 @@
   "dependencies": {
     "@jomans-vault/api": "workspace:*",
     "@jomans-vault/auth": "workspace:*",
+    "@jomans-vault/crypto": "workspace:*",
     "@jomans-vault/db": "workspace:*",
     "@jomans-vault/ui": "workspace:*",
     "@orpc/client": "catalog:",

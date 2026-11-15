@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { varlockVitePlugin } from "@varlock/vite-integration";
@@ -10,10 +12,17 @@ export default defineConfig({
     port: 3001,
   },
   resolve: {
-    tsconfigPaths: true,
+    alias: {
+      "@": fileURLToPath(new URL("src", import.meta.url)),
+    },
   },
   plugins: [
-    varlockVitePlugin({ ssrInjectMode: "auto-load" }),
+    varlockVitePlugin({
+      ssrInjectMode: "init-only",
+      ssrEntryCode: [
+        `import ${JSON.stringify(fileURLToPath(new URL("src/validate-master-key.server.ts", import.meta.url)))};`,
+      ],
+    }),
     tailwindcss(),
     tanstackStart(),
     nitro({ preset: "node-server" }),

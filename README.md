@@ -30,11 +30,21 @@ This project uses PostgreSQL with Drizzle ORM.
 1. Make sure you have a PostgreSQL database set up.
 2. Update your `apps/web/.env` file with your PostgreSQL connection details.
 
-3. Apply the schema to your database:
+3. Generate a master key and put the resulting value in `apps/web/.env`:
 
 ```bash
-bun run db:push
+VAULT_MASTER_KEY=$(openssl rand -base64 32)
 ```
+
+Keep this key safe: losing it makes stored values unrecoverable.
+
+4. Apply the committed migrations to your database:
+
+```bash
+bun run db:migrate
+```
+
+If your local database was created earlier with `db:push`, recreate it before `db:migrate`: run `bun run db:down`, then drop the volume or the database and start Postgres again.
 
 Then, run the development server:
 
@@ -91,7 +101,9 @@ Run standalone Node/Bun tools that use Varlock from the owning app directory so 
 - Logs: bun run docker:logs
 - Stop: bun run docker:down
 
-Environment variables are read from each app's `.env` file (baked into web builds for public variables) and overridden in `docker-compose.yml` for container networking.
+The build and start scripts load `apps/web/.env` with Compose's `--env-file` option. This preserves a `VAULT_MASTER_KEY` stored only in that file when Compose resolves the service's valueless environment entry; an exported shell value takes precedence. When invoking Compose directly to build or start the web service, also pass `--env-file apps/web/.env`. Without that option or an exported key, the bare entry overrides the service's `env_file` value and the server refuses to start.
+
+Public variables are baked into web builds. Container networking values are overridden in `docker-compose.yml`.
 
 For more details, see the guide on [Deploying with Docker Compose](https://www.better-t-stack.dev/docs/guides/docker).
 
@@ -118,7 +130,7 @@ jomans-vault/
 - `bun run build`: Build all applications
 - `bun run dev:web`: Start only the web application
 - `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
+- `bun run db:push`: Push schema changes for disposable prototyping; use migrations for setup
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations
 - `bun run db:studio`: Open database studio UI

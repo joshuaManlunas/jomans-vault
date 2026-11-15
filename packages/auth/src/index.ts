@@ -22,4 +22,6 @@ export const createAuth = (env: AuthConfig, database: Database) =>
     plugins: [tanstackStartCookies()],
   });
 
+export type Auth = ReturnType<typeof createAuth>;
+
 export type Session = ReturnType<typeof createAuth>["$Infer"]["Session"];
