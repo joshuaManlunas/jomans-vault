@@ -2,11 +2,11 @@ import type { Context as ApiContext } from "@jomans-vault/api/context";
 
 import { db, auth } from "./services";
 
-export async function createContext({
+export const createContext = async ({
   req,
 }: {
   req: Request;
-}): Promise<ApiContext> {
+}): Promise<ApiContext> => {
   const session = await auth.api.getSession({
     headers: req.headers,
   });
@@ -14,6 +14,6 @@ export async function createContext({
     db,
     session,
   };
-}
+};
 
 export type Context = Awaited<ReturnType<typeof createContext>>;

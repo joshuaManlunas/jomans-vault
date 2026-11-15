@@ -4,4 +4,4 @@ import { authMiddleware } from "@/middleware/auth";
 
 export const getUser = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }) => context.session);
+  .handler(async ({ context }) => await Promise.resolve(context.session));

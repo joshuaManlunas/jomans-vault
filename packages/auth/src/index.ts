@@ -9,8 +9,8 @@ export interface AuthConfig {
   BETTER_AUTH_SECRET: string;
 }
 
-export function createAuth(env: AuthConfig, database: Database) {
-  return betterAuth({
+export const createAuth = (env: AuthConfig, database: Database) =>
+  betterAuth({
     database: drizzleAdapter(database, {
       provider: "pg",
       schema,
@@ -21,6 +21,5 @@ export function createAuth(env: AuthConfig, database: Database) {
     baseURL: env.BETTER_AUTH_URL,
     plugins: [tanstackStartCookies()],
   });
-}
 
 export type Session = ReturnType<typeof createAuth>["$Infer"]["Session"];
