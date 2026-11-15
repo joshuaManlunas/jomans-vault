@@ -30,11 +30,21 @@ This project uses PostgreSQL with Drizzle ORM.
 1. Make sure you have a PostgreSQL database set up.
 2. Update your `apps/web/.env` file with your PostgreSQL connection details.
 
-3. Apply the schema to your database:
+3. Generate a master key and put the resulting value in `apps/web/.env`:
 
 ```bash
-bun run db:push
+VAULT_MASTER_KEY=$(openssl rand -base64 32)
 ```
+
+Keep this key safe: losing it makes stored values unrecoverable.
+
+4. Apply the committed migrations to your database:
+
+```bash
+bun run db:migrate
+```
+
+If your local database was created earlier with `db:push`, recreate it before `db:migrate`: run `bun run db:down`, then drop the volume or the database and start Postgres again.
 
 Then, run the development server:
 
@@ -118,7 +128,7 @@ jomans-vault/
 - `bun run build`: Build all applications
 - `bun run dev:web`: Start only the web application
 - `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
+- `bun run db:push`: Push schema changes for disposable prototyping; use migrations for setup
 - `bun run db:generate`: Generate database client/types
 - `bun run db:migrate`: Run database migrations
 - `bun run db:studio`: Open database studio UI

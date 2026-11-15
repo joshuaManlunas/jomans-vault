@@ -61,6 +61,7 @@
     "CI",
     "DATABASE_URL",
     "NODE_ENV",
+    "VAULT_MASTER_KEY",
     "VERCEL",
     "VERCEL_ENV",
     "VERCEL_PROJECT_PRODUCTION_URL",

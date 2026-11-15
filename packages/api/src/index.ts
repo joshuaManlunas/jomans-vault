@@ -7,14 +7,14 @@ export const o = os.$context<Context>();
 export const publicProcedure = o;
 
 const requireAuth = o.middleware(async ({ context, next }) => {
-  if (!context.session?.user) {
+  if (!context.principal) {
     throw new ORPCError("UNAUTHORIZED");
   }
   return await next({
     context: {
-      session: context.session,
+      principal: context.principal,
     },
   });
 });
 
-export const protectedProcedure = publicProcedure.use(requireAuth);
+export const authedProcedure = publicProcedure.use(requireAuth);

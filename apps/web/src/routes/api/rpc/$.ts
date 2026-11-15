@@ -1,27 +1,11 @@
 import { appRouter } from "@jomans-vault/api/routers/index";
-import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { createContext } from "../../../context";
 
 const rpcHandler = new RPCHandler(appRouter, {
-  interceptors: [
-    onError((cause) => {
-      console.error(cause);
-    }),
-  ],
-});
-
-const apiHandler = new OpenAPIHandler(appRouter, {
-  plugins: [
-    new OpenAPIReferencePlugin({
-      schemaConverters: [new ZodToJsonSchemaConverter()],
-    }),
-  ],
   interceptors: [
     onError((cause) => {
       console.error(cause);
@@ -36,14 +20,6 @@ const handle = async ({ request }: { request: Request }) => {
   });
   if (rpcResult.response) {
     return rpcResult.response;
-  }
-
-  const apiResult = await apiHandler.handle(request, {
-    prefix: "/api/rpc/api-reference",
-    context: await createContext({ req: request }),
-  });
-  if (apiResult.response) {
-    return apiResult.response;
   }
 
   return new Response("Not found", { status: 404 });

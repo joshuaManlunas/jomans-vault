@@ -55,6 +55,7 @@
       "dependencies": {
         "@jomans-vault/api": "workspace:*",
         "@jomans-vault/auth": "workspace:*",
+        "@jomans-vault/crypto": "workspace:*",
         "@jomans-vault/db": "workspace:*",
         "@jomans-vault/ui": "workspace:*",
         "@orpc/client": "catalog:",
@@ -99,6 +100,7 @@
       "name": "@jomans-vault/api",
       "dependencies": {
         "@jomans-vault/auth": "workspace:*",
+        "@jomans-vault/crypto": "workspace:*",
         "@jomans-vault/db": "workspace:*",
         "@orpc/client": "catalog:",
         "@orpc/openapi": "catalog:",
@@ -108,6 +110,10 @@
       },
       "devDependencies": {
         "@jomans-vault/config": "workspace:*",
+        "@types/bun": "^1.4.4",
+        "@types/pg": "^8.23.1",
+        "drizzle-orm": "catalog:",
+        "pg": "^8.23.0",
         "typescript": "catalog:",
       },
     },

@@ -1,4 +1,5 @@
 import { glob } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -54,8 +55,8 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    tsconfigPaths: true,
     alias: {
+      "@": fileURLToPath(new URL("src", import.meta.url)),
       tslib: "tslib/tslib.es6.js",
     },
   },
