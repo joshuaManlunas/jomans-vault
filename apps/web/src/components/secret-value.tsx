@@ -12,23 +12,23 @@ const messages = {
   other: "Couldn't reveal this value. Try again.",
 };
 
-export const SecretValue = ({
+const SecretValueControl = ({
   project,
   env,
   secretKey,
   version,
+  onChanged,
 }: {
   project: string;
   env: string;
   secretKey: string;
   version: number;
+  onChanged: (changed: boolean) => void;
 }) => {
   const queryClient = useQueryClient();
   const [value, setValue] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<"missing" | "changed" | "other" | null>(
-    null
-  );
+  const [error, setError] = useState<"missing" | "other" | null>(null);
   const request = useRef<AbortController | null>(null);
 
   useEffect(() => () => request.current?.abort(), []);
@@ -43,6 +43,7 @@ export const SecretValue = ({
       return;
     }
     setError(null);
+    onChanged(false);
     if (value !== null) {
       setValue(null);
       return;
@@ -61,7 +62,7 @@ export const SecretValue = ({
       if (result.version === version) {
         setValue(result.value);
       } else {
-        setError("changed");
+        onChanged(true);
         await refresh();
       }
     } catch (error_) {
@@ -116,6 +117,38 @@ export const SecretValue = ({
       {error && (
         <p role="alert" className="text-destructive">
           {messages[error]}
+        </p>
+      )}
+    </div>
+  );
+};
+
+export const SecretValue = ({
+  project,
+  env,
+  secretKey,
+  version,
+}: {
+  project: string;
+  env: string;
+  secretKey: string;
+  version: number;
+}) => {
+  const [changed, setChanged] = useState(false);
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <SecretValueControl
+        key={`${project}/${env}/${secretKey}/${version}`}
+        project={project}
+        env={env}
+        secretKey={secretKey}
+        version={version}
+        onChanged={setChanged}
+      />
+      {changed && (
+        <p role="alert" className="text-destructive">
+          {messages.changed}
         </p>
       )}
     </div>

@@ -97,7 +97,7 @@ const EnvironmentSecrets = () => {
                 </TableCell>
                 <TableCell className="whitespace-normal">
                   <SecretValue
-                    key={`${project}/${env}/${secret.key}/${secret.version}`}
+                    key={`${project}/${env}/${secret.key}`}
                     project={project}
                     env={env}
                     secretKey={secret.key}
