@@ -37,6 +37,8 @@ export const createVaultApiHandler = ({
       prefix: "/api/v1",
       context: await createContext({ db, auth, headers: request.headers }),
     });
-    return response ?? new Response("Not found", { status: 404 });
+    const result = response ?? new Response("Not found", { status: 404 });
+    result.headers.set("Cache-Control", "private, no-store");
+    return result;
   };
 };

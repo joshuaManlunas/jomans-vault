@@ -90,6 +90,7 @@ test.each([
       new Request(`${baseURL}/api/v1/private-data`)
     );
     expect(response.status).toBe(401);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     const body = await response.json();
     expect(body).toEqual(await anonymous.json());
     expect(body).toMatchObject({
@@ -125,6 +126,7 @@ test("private data accepts the cookie from real Better Auth sign-up", async () =
     new Request(`${baseURL}/api/v1/private-data`, { headers: { cookie } })
   );
   expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   expect(await response.json()).toMatchObject({
     message: "This is private",
     user: { email },
