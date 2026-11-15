@@ -15,7 +15,12 @@ import { NewProjectDialog } from "@/components/new-project-dialog";
 import { orpc } from "@/utils/orpc";
 
 const ProjectsList = () => {
-  const projects = useQuery(orpc.projects.list.queryOptions());
+  const { session } = Route.useRouteContext();
+  const projects = useQuery(
+    orpc.projects.list.queryOptions({
+      queryKey: [...orpc.projects.list.key(), { userId: session.user.id }],
+    })
+  );
 
   if (projects.isPending) {
     return (
@@ -68,13 +73,17 @@ const ProjectsList = () => {
   );
 };
 
-const ProjectsPage = () => (
-  <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
-    <NewProjectDialog>
-      <ProjectsList />
-    </NewProjectDialog>
-  </main>
-);
+const ProjectsPage = () => {
+  const { session } = Route.useRouteContext();
+
+  return (
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
+      <NewProjectDialog key={session.user.id}>
+        <ProjectsList />
+      </NewProjectDialog>
+    </main>
+  );
+};
 
 export const Route = createFileRoute("/_auth/projects/")({
   component: ProjectsPage,
