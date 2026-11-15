@@ -1,3 +1,5 @@
+import { sql } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   bytea,
   index,
@@ -68,6 +70,57 @@ export const projectKey = pgTable(
     retiredAt: timestamp("retired_at"),
   },
   (table) => [index("project_key_project_id_idx").on(table.projectId)]
+);
+
+export const secret = pgTable(
+  "secret",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    environmentId: text("environment_id")
+      .notNull()
+      .references(() => environment.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    kind: text("kind").notNull(),
+    description: text("description"),
+    currentVersionId: text("current_version_id").references(
+      // oxlint-disable-next-line no-use-before-define -- The required foreign key is circular.
+      (): AnyPgColumn => secretVersion.id
+    ),
+    deletedAt: timestamp("deleted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("secret_environment_id_key_live_unique")
+      .on(table.environmentId, table.key)
+      .where(sql`${table.deletedAt} IS NULL`),
+  ]
+);
+
+export const secretVersion = pgTable(
+  "secret_version",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    secretId: text("secret_id")
+      .notNull()
+      .references(() => secret.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    ciphertext: bytea("ciphertext").notNull(),
+    iv: bytea("iv").notNull(),
+    createdByType: text("created_by_type").notNull(),
+    createdById: text("created_by_id").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("secret_version_secret_id_version_unique").on(
+      table.secretId,
+      table.version
+    ),
+  ]
 );
 
 export const auditEvent = pgTable(
