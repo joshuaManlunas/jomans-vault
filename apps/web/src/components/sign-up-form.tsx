@@ -32,7 +32,7 @@ const SignUpForm = ({ onSwitchToSignIn }: { onSwitchToSignIn: () => void }) => {
         {
           onSuccess: () => {
             navigate({
-              to: "/dashboard",
+              to: "/projects",
             });
             toast.success("Sign up successful");
           },
