@@ -310,7 +310,9 @@ new feature, ask.
   ```
 
   It saves `feedback-<k>.md` and starts the next round with a fresh round
-  budget. Go to **build**, spawning a builder with
+  budget. When every `concurrency` slot is taken it refuses and saves
+  nothing: tell the user, and send the same feedback again once a running job
+  finishes. Go to **build**, spawning a builder with
   `The user gave feedback: read feedback-<k>.md and address it, push, and update build.md for round <N>.`
   and continue like any job.
 - **Rejecting or benching a `needs-info`, `needs-human` or `split` job**

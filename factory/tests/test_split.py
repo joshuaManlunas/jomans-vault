@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from urllib.parse import parse_qs, urlparse
 
 args = sys.argv[1:]
 state_path = Path(os.environ["FAKE_GH_STATE"])
@@ -48,12 +50,15 @@ if args[:2] == ["api", "user"]:
     print("operator")
 elif args[:2] == ["issue", "view"]:
     print(json.dumps(state["issues"][args[2]]))
-elif args[:2] == ["issue", "list"]:
-    print(json.dumps([
+elif args[0] == "api" and args[1].startswith("repos/{owner}/{repo}/issues?"):
+    assert args[2:] == ["--paginate", "--slurp"]
+    query = parse_qs(urlparse(args[1]).query)
+    assert query["state"] == ["open"]
+    print(json.dumps([[
         {"number": i["number"], "title": i["title"]}
         for i in state["issues"].values()
-        if i["state"] == "OPEN" and option("--label") in [l["name"] for l in i["labels"]]
-    ]))
+        if i["state"] == "OPEN" and query["labels"][0] in [l["name"] for l in i["labels"]]
+    ]]))
 elif args[:2] == ["issue", "create"]:
     if state.get("fail_create") == state["next_issue"]:
         sys.exit("simulated create failure")
@@ -145,10 +150,10 @@ class SplitTests(unittest.TestCase):
         self.parent_dir = self.factory / "jobs" / self.parent_id
         self.intake()
 
-    def job(self, *args, ok=True, text=None):
+    def job(self, *args, ok=True, text=None, timeout=None):
         result = subprocess.run(
             [sys.executable, str(self.factory / "bin/job"), *args],
-            cwd=self.root, env=self.env, input=text, capture_output=True, text=True,
+            cwd=self.root, env=self.env, input=text, capture_output=True, text=True, timeout=timeout,
         )
         self.assertEqual(result.returncode, 0 if ok else 1, result.stdout + result.stderr)
         return result
@@ -294,6 +299,35 @@ class SplitTests(unittest.TestCase):
         self.assertIn("Try a different split", (self.parent_dir / "feedback-1.md").read_text())
         self.assertTrue((self.parent_dir / "issue.md").exists())
         self.assertEqual(self.state()["issues"]["10"]["labels"], [{"name": "factory"}])
+
+    def test_feedback_needs_a_free_slot_reads_the_newest_file_and_waits_on_no_other_job(self):
+        issues = self.state()["issues"]
+        issues["11"] = {**issues["10"], "number": 11, "title": "Other",
+                        "url": "https://github.com/test/repo/issues/11"}
+        self.state(issues=issues)
+        other = self.job("create", "11").stdout.strip()
+        self.intake(decision="ACCEPT")
+        self.update_job(stage="needs-human")
+        decision = self.parent_dir / "decision.md"
+        decision.write_text("ESCALATE\n\n## Why\nOut of rounds.\n")
+        os.utime(decision, ns=(2_000_000_000, 2_000_000_000))
+        # Older feedback 1-9: as text, feedback-9.md sorts after the new feedback-10.md.
+        for k in range(1, 10):
+            earlier = self.parent_dir / f"feedback-{k}.md"
+            earlier.write_text("Earlier feedback")
+            os.utime(earlier, ns=(1_000_000_000, 1_000_000_000))
+        self.config(concurrency=1)
+        refused = self.job("feedback", self.parent_id, text="Try again", ok=False)
+        self.assertIn("concurrency 1 reached; running: " + other, refused.stderr)
+        self.assertFalse((self.parent_dir / "feedback-10.md").exists())
+        self.assertEqual(self.read_job()["stage"], "needs-human")
+        self.update_job(other, stage="merged")
+        # Another command holding an unrelated job's lock must not stall the slot check.
+        with open(self.factory / "jobs" / other / ".lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            self.job("feedback", self.parent_id, text="Try again", timeout=20)
+        self.assertEqual(self.read_job()["stage"], "build")
+        self.assertIn("Try again", (self.parent_dir / "feedback-10.md").read_text())
 
     def test_only_trusted_local_records_establish_dependencies(self):
         state = self.state()

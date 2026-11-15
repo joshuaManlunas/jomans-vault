@@ -90,8 +90,11 @@ class GitHub(Forge):
                 "can_push": bool((data.get("permissions") or {}).get("push"))}
 
     def issue_list(self, label, state="open"):
-        return self.gh_json("issue", "list", "--label", label, "--state", state,
-                            "--limit", "200", "--json", "number,title")
+        # Every page: the queue treats an issue missing here as closed or unlabeled.
+        query = urlencode({"labels": label, "state": state, "per_page": 100})
+        pages = self.gh_json("api", f"repos/{{owner}}/{{repo}}/issues?{query}", "--paginate", "--slurp")
+        return [{"number": i["number"], "title": i["title"]}
+                for page in pages for i in page if "pull_request" not in i]
 
     def issue_view(self, number):
         data = self.gh_json("issue", "view", str(number), "--json",
