@@ -103,25 +103,37 @@ def job_dir(job_id):
     return JOBS / job_id
 
 
+# A process waits for at most one job's lock, and only while holding no other
+# lock; the slot lock comes after it. Factory-wide reads go through peek(), which
+# save()'s atomic replace makes safe without a lock, so two commands can't each
+# hold one job and wait for the other's.
 _locks = {}
 
 
-def release_locks():
-    """Release every job lock held by this process before a long wait."""
-    for lock in _locks.values():
-        lock.close()
-    _locks.clear()
+def _lock(key, path):
+    if key not in _locks:
+        _locks[key] = open(path, "w")
+        fcntl.flock(_locks[key], fcntl.LOCK_EX)
+
+
+def release_locks(*keys):
+    """Release this process's locks (the named ones, or all) before a long wait."""
+    for key in keys or list(_locks):
+        if key in _locks:
+            _locks.pop(key).close()
 
 
 def load(job_id):
     """Read a job, holding its lock until released or this process exits."""
-    path = job_dir(job_id) / "job.json"
-    if not path.exists():
+    if not (job_dir(job_id) / "job.json").exists():
         die(f"no job {job_id}")
-    if job_id not in _locks:
-        _locks[job_id] = open(job_dir(job_id) / ".lock", "w")
-        fcntl.flock(_locks[job_id], fcntl.LOCK_EX)
-    job = json.loads(path.read_text())
+    _lock(job_id, job_dir(job_id) / ".lock")
+    return peek(job_id)
+
+
+def peek(job_id):
+    """Read a job without its lock, for checks and display, never to save."""
+    job = json.loads((job_dir(job_id) / "job.json").read_text())
     job.setdefault("children", None)
     job.setdefault("parent", None)
     job.setdefault("reviews_gate", None)
@@ -138,7 +150,7 @@ def save(job):
 def all_jobs():
     if not JOBS.exists():
         return []
-    return [load(p.name) for p in sorted(JOBS.iterdir()) if (p / "job.json").exists()]
+    return [peek(p.name) for p in sorted(JOBS.iterdir()) if (p / "job.json").exists()]
 
 
 def running(jobs):
@@ -146,19 +158,26 @@ def running(jobs):
     return [j for j in jobs if j["stage"] not in TERMINAL | WAITING]
 
 
+def lock_slots():
+    """Serialize slot checks until exit, so two moves can't both take the last slot."""
+    JOBS.mkdir(parents=True, exist_ok=True)
+    _lock(".slots", JOBS / ".slots.lock")
+
+
 def require_slot(job_id):
+    lock_slots()
     busy = [j["id"] for j in running(all_jobs()) if j["id"] != job_id]
     require(len(busy) < CONCURRENCY,
             f"concurrency {CONCURRENCY} reached; running: {', '.join(busy)}")
 
 
-def resolve(arg):
+def resolve(arg, lock=True):
     if arg.isdigit():
         matches = [j for j in all_jobs() if j["issue"] == int(arg)]
         if not matches:
             die(f"no job for issue #{arg}")
-        return matches[0]
-    return load(arg)
+        arg = matches[0]["id"]
+    return load(arg) if lock else peek(arg)
 
 
 def first_line(path):
@@ -487,7 +506,7 @@ def cmd_reviews(job):
     timeout = float(os.environ.get("FACTORY_REVIEWS_TIMEOUT_SECONDS", config["timeout_minutes"] * 60))
     poll = float(os.environ.get("FACTORY_REVIEWS_POLL_SECONDS", config["poll_seconds"]))
     require(timeout >= 0 and poll >= 0, "review timeout and poll seconds must be non-negative")
-    release_locks()  # Resolving an issue number may have locked every job.
+    release_locks()
     pr = FORGE.pr_view(job["pr"], ["draft", "head_sha"])
     require(pr["head_sha"] == head, "the PR HEAD differs from the worktree HEAD; push the branch first")
     if pr["draft"]:
@@ -708,9 +727,10 @@ def advance(job, stage, *, splitting=False):
 
     elif old == "needs-human":
         require(decision != "SPLIT", "a SPLIT proposal must return to intake or use `job split`")
-        feedback = sorted(d.glob("feedback-*.md"))
-        require(feedback and feedback[-1].stat().st_mtime > (d / "decision.md").stat().st_mtime,
+        feedback = list(d.glob("feedback-*.md"))
+        require(feedback and max(p.stat().st_mtime_ns for p in feedback) > (d / "decision.md").stat().st_mtime_ns,
                 "use `job feedback` to send a job back to the builder")
+        require_slot(job["id"])
         job["round_limit"] = job["round"] + CONFIG["max_rounds"]
         next_round(job)
         label("issue", job["issue"], remove=LABELS["needs_human"])
@@ -744,6 +764,7 @@ def slugify(title):
 
 
 def cmd_create(number):
+    lock_slots()  # Also keeps two creates from taking the same issue or job id.
     jobs = all_jobs()
     existing = [j for j in jobs if j["issue"] == int(number)]
     if existing:
@@ -813,14 +834,23 @@ def cmd_queue():
     """Rows in the order to start them. `resume` and `new` rows fit in the
     concurrency slots; the rest show as `hold` until a running job finishes."""
     jobs = {j["issue"]: j for j in all_jobs()}
-    # A job is done once its PR is merged on the forge, which also closes the issue.
-    for j in jobs.values():
-        if j["stage"] not in TERMINAL | {"split"} and j["pr"] and pr_state(j) == "MERGED":
+
+    def finish(j, done):
+        """Re-check under the job's own lock, released at once so queue never holds two."""
+        j = load(j["id"])
+        if done(j):
             save(advance(sync(j), "merged"))
+        release_locks(j["id"])
+        jobs[j["issue"]] = j
+
+    # A job is done once its PR is merged on the forge, which also closes the issue.
+    for j in list(jobs.values()):
+        if j["stage"] not in TERMINAL | {"split"} and j["pr"] and pr_state(j) == "MERGED":
+            finish(j, lambda j: j["stage"] not in TERMINAL | {"split"})
     for j in reversed(list(jobs.values())):
         children = j.get("children") or []
         if j["stage"] == "split" and children and merged_children(j, jobs.values()) == len(children):
-            save(advance(sync(j), "merged"))
+            finish(j, lambda j: j["stage"] == "split")
     issues = FORGE.issue_list(LABELS["queue"])
     open_numbers = {i["number"] for i in issues}
     running_rows, replied_rows, new_rows, other_rows = [], [], [], []
@@ -917,6 +947,10 @@ def cmd_feedback(job, text):
         die(f"{job['id']} is in {job['stage']}, not needs-human")
     if not text.strip():
         die("no feedback on stdin")
+    try:
+        require_slot(job["id"])  # Before saving it, so a refused feedback leaves no trace.
+    except Refused as e:
+        die(f"{e}; give the feedback again once a job finishes")
     d = job_dir(job["id"])
     k = len(list(d.glob("feedback-*.md"))) + 1
     (d / f"feedback-{k}.md").write_text(f"# Feedback {k}\n\nFrom @{operator()} after the job escalated.\n\n{text.strip()}\n")
@@ -951,7 +985,7 @@ def elapsed(job):
 
 
 def cmd_summary(args):
-    jobs = [resolve(a) for a in args] if args else all_jobs()
+    jobs = [resolve(a, lock=False) for a in args] if args else all_jobs()
     rows = [("job", "issue", "stage", "round", "pr", "cost", "time")]
     for j in jobs:
         sync(j)  # for display only; the orchestrator owns the saved state

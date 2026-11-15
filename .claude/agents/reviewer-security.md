@@ -44,6 +44,32 @@ is in the main checkout; your one file goes there.
 - **Secrets**: keys, credentials or `.env` values in commits.
 - **Dependencies**: new packages, and whether they are needed and maintained.
 
+### This project's hot spots
+
+jomans-vault stores other projects' secrets, so a leak here leaks everything.
+
+- **Auth and sessions**: Better Auth setup in `packages/auth`, mounted at
+  `apps/web/src/routes/api/auth/`; the session guard in
+  `apps/web/src/routes/_auth/` and `apps/web/src/middleware/`; request context
+  built in `apps/web/src/context.ts`. API keys (Bearer / `x-api-key`) must never
+  fall back to the cookie when invalid.
+- **Authorization**: procedures and middleware in `packages/api` (`requireScope`,
+  ownership checks). Every route must check owner, project/environment scope and
+  the permission (`read`, `reveal`, `inject`, `write`, `delete`). Not-owned
+  projects return 404, never 403, so slugs don't leak.
+- **Plaintext exposure**: only `reveal` (one value) and `inject` (export) may
+  return plaintext. Values must never reach logs, error messages, audit events,
+  list responses, OpenAPI examples or the UI unmasked without a click.
+- **Crypto**: envelope encryption (per-project DEK wrapped by
+  `VAULT_MASTER_KEY`, AES-256-GCM via Web Crypto). Flag IV reuse, non-random
+  IVs, unauthenticated modes, keys or DEKs stored unwrapped, or decryption
+  errors that return data.
+- **Input to queries and shells**: Drizzle queries in `packages/api` and
+  `packages/db` (raw `sql` templates), and the `jv` CLI's process spawning and
+  dotenv export escaping.
+- **Secrets in the repo**: `.env` files, `.env.schema` items missing
+  `@sensitive`, real keys in tests or fixtures.
+
 ## Write review-security.md
 
 ```markdown

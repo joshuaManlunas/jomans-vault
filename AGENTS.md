@@ -125,9 +125,31 @@ Oxlint + Oxfmt will catch most mechanical issues automatically. Focus your atten
 
 Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run `bunx ultracite fix` before committing to ensure compliance.
 
+## Development
+
+**Fresh checkout.** `bun install --frozen-lockfile`. Env is validated by Varlock against `apps/web/.env.schema`; values live in the gitignored `apps/web/.env` (`NODE_ENV`, `BETTER_AUTH_SECRET` (32+ chars), `BETTER_AUTH_URL`, `DATABASE_URL`). A worktree has no `.env`: copy it from the main checkout, or export the non-secret local defaults that `factory/checks.sh` uses. Postgres: `bun run db:start` (docker-compose, `postgres:password@localhost:5432/jomans-vault`); schema changes go through `bun run db:generate` then `bun run db:migrate`.
+
+**Dev server.** `bun run dev:web -- --port <port>` starts the web app (default port 3001). The docs site: `cd apps/fumadocs && bun run dev -- --port <port>` (default 4000).
+
+**Validation** (what `factory/checks.sh` runs, from the repo root): `bun run check` (lint + format), `bun run check-types`, `bun run build`, and `bun run test` once the repo has tests (needs Postgres up).
+
 <!-- factory:section -->
 
 ## Software factory
 
 `/factory run` builds every open GitHub issue labeled `factory` through intake → spec → build → gate → review → GitHub reviews → approve, one PR per issue. State is in `factory/jobs/` (gitignored); `factory/bin/job` is its only writer. Checks: `factory/checks.sh`. How it works: `factory/FACTORY.md`. Dashboard: `cd factory && python3 -m http.server`, then open http://localhost:8000/dashboard.html. Each job works in its own git worktree at `.worktrees/<job-id>` (gitignored); tools run from the repo root that don't read `.gitignore` should exclude `.worktrees/`.
 <!-- /factory:section -->
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain.md`.

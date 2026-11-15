@@ -271,7 +271,7 @@
   <span id="totals"></span>
 </footer>
 
-<div id="overlay">
+<div id="overlay" inert aria-hidden="true">
   <div class="scrim" data-close></div>
   <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="d-title">
     <div class="d-head">
@@ -313,6 +313,8 @@ const roundCache = new Map() // "<job>/<n>" -> verdicts of a finished round
 let openJobId = null
 let openPath = null
 let openText = null
+let drawerOpener = null
+let lastFilesRender = ''
 
 async function fetchText(url) {
   const res = await fetch(url, { cache: 'no-store' })
@@ -471,28 +473,43 @@ async function poll() {
   try {
     const config = JSON.parse(await fetchText('config.json'))
     prLabel = config.forge?.type === 'gitlab' ? 'MR' : 'PR'
-    jobs = await loadJobs()
+    const loaded = await loadJobs()
+    jobs = loaded.jobs
     await render()
     if (openJobId) await refreshDrawer()
-    status.className = 'status'
-    status.innerHTML = `<span class="dot"></span>jobs/ · ${new Date().toLocaleTimeString()}`
+    const time = new Date().toLocaleTimeString()
+    if (loaded.unreadable.length) {
+      status.className = 'status error'
+      status.innerHTML = `<span class="dot"></span>jobs/ · ${time} · could not read ${esc(loaded.unreadable.join(', '))}`
+    } else {
+      status.className = 'status'
+      status.innerHTML = `<span class="dot"></span>jobs/ · ${time}`
+    }
   } catch (err) {
     status.className = 'status error'
     status.innerHTML = `<span class="dot"></span>${esc(err.message)}`
   }
 }
 
-// factory/bin/job writes each jobs/<id>/job.json.
+// factory/bin/job writes each jobs/<id>/job.json. A job that can't be read is
+// left off the board but reported, so an incomplete board isn't mistaken for a
+// short queue.
 async function loadJobs() {
   let listing
-  try { listing = await fetchText('jobs/') } catch { return [] }
+  try { listing = await fetchText('jobs/') } catch { return { jobs: [], unreadable: [] } }
   const doc = new DOMParser().parseFromString(listing, 'text/html')
   const ids = [...doc.querySelectorAll('a')]
     .map((a) => decodeURIComponent(a.getAttribute('href')))
     .filter((h) => h.endsWith('/'))
     .map((h) => h.slice(0, -1))
     .sort()
-  return Promise.all(ids.map(async (id) => JSON.parse(await fetchText(`jobs/${id}/job.json`))))
+  const loaded = await Promise.all(ids.map(async (id) => {
+    try { return JSON.parse(await fetchText(`jobs/${id}/job.json`)) } catch { return null }
+  }))
+  return {
+    jobs: loaded.filter((job) => job !== null),
+    unreadable: ids.filter((_, i) => loaded[i] === null),
+  }
 }
 
 // ---- Drawer --------------------------------------------------------------
@@ -540,7 +557,8 @@ async function refreshDrawer() {
   if (!job) return
   $('d-num').textContent = `${job.id} · ${job.stage}${job.round ? ` · round ${job.round}` : ''} · $${Number(job.cost_usd).toFixed(2)} · ${elapsed(job)}`
   $('d-title').textContent = job.title
-  $('d-links').innerHTML = links(job)
+  const jobLinks = links(job)
+  if ($('d-links').innerHTML !== jobLinks) $('d-links').innerHTML = jobLinks
 
   const base = `jobs/${job.id}/`
   const files = sortFiles(await listFiles(base))
@@ -556,7 +574,7 @@ async function refreshDrawer() {
   }))
 
   let group = null
-  $('d-files').innerHTML = files.map((f) => {
+  const html = files.map((f) => {
     const g = f.includes('/') ? f.split('/')[0].replace('round-', 'Round ') : 'Job'
     const head = g !== group ? `<div class="group">${esc(g)}</div>` : ''
     group = g
@@ -568,6 +586,15 @@ async function refreshDrawer() {
     return `${head}<button class="file ${f === openPath ? 'on' : ''}" data-file="${esc(f)}">
       <span class="v ${t || ''}"></span>${name}</button>`
   }).join('') || '<div class="empty">No files yet.</div>'
+  if (html !== lastFilesRender) {
+    lastFilesRender = html
+    const focusedFile = $('d-files').contains(document.activeElement) ? document.activeElement.dataset.file : null
+    $('d-files').innerHTML = html
+    if (focusedFile) {
+      const button = [...$('d-files').querySelectorAll('[data-file]')].find((b) => b.dataset.file === focusedFile) || document.querySelector('.close')
+      button.focus()
+    }
+  }
 
   if (text !== openText) {
     openText = text
@@ -575,11 +602,15 @@ async function refreshDrawer() {
   }
 }
 
-async function openDrawer(id) {
+async function openDrawer(id, opener) {
+  drawerOpener = opener
   openJobId = id
   openPath = null
   openText = undefined
   document.body.classList.add('open')
+  $('overlay').inert = false
+  $('overlay').removeAttribute('aria-hidden')
+  document.querySelector('.close').focus()
   try {
     await refreshDrawer()
   } catch (err) {
@@ -588,14 +619,21 @@ async function openDrawer(id) {
 }
 
 function closeDrawer() {
+  if (!openJobId) return
+  const opener = drawerOpener?.isConnected ? drawerOpener
+    : [...document.querySelectorAll('[data-job]')].find((c) => c.dataset.job === openJobId)
   openJobId = null
   document.body.classList.remove('open')
+  opener?.focus()
+  $('overlay').inert = true
+  $('overlay').setAttribute('aria-hidden', 'true')
+  drawerOpener = null
 }
 
 document.addEventListener('click', (e) => {
   if (e.target.closest('a')) return
   const cardEl = e.target.closest('[data-job]')
-  if (cardEl) return openDrawer(cardEl.dataset.job)
+  if (cardEl) return openDrawer(cardEl.dataset.job, cardEl)
   const fileEl = e.target.closest('[data-file]')
   if (fileEl) {
     openPath = fileEl.dataset.file
@@ -607,8 +645,20 @@ document.addEventListener('click', (e) => {
 })
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') return closeDrawer()
+  if (openJobId && e.key === 'Tab') {
+    const drawer = document.querySelector('.drawer')
+    const controls = [...drawer.querySelectorAll('a[href], button, [tabindex="0"]')]
+    const first = controls[0]
+    const last = controls[controls.length - 1]
+    if (!drawer.contains(document.activeElement) || (e.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+      e.preventDefault()
+      const next = e.shiftKey ? last : first
+      next.focus()
+    }
+    return
+  }
   const cardEl = e.target.closest?.('[data-job]')
-  if (cardEl && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDrawer(cardEl.dataset.job) }
+  if (cardEl && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDrawer(cardEl.dataset.job, cardEl) }
 })
 
 // ---- Markdown (just enough for the factory's files) ---------------------

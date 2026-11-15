@@ -354,6 +354,16 @@ class GitHubAdapterTests(unittest.TestCase):
                     self.assertEqual(command.call_args.args,
                         ('label', 'create', 'factory', '--color', 'abcdef', '--description', 'Queue'))
 
+    def test_github_issue_list_reads_every_page_and_drops_pull_requests(self):
+        pages = [[{'number': n, 'title': f'Issue {n}'} for n in range(1, 101)],
+                 [{'number': 101, 'title': 'Late'}, {'number': 102, 'title': 'A PR', 'pull_request': {}}]]
+        with patch.object(self.backend, 'gh', return_value=json.dumps(pages)) as command:
+            issues = self.backend.issue_list('factory:queue')
+        self.assertEqual([i['number'] for i in issues], list(range(1, 102)))
+        command.assert_called_once_with(
+            'api', 'repos/{owner}/{repo}/issues?labels=factory%3Aqueue&state=open&per_page=100',
+            '--paginate', '--slurp')
+
     def test_github_pr_creation_preserves_body_and_returns_contract_number(self):
         with patch.object(self.backend, 'gh', return_value='https://github.com/test/repo/pull/19\n') as command:
             self.assertEqual(self.backend.pr_create('main', 'factory/work', 'Work', 'Closes #7', True),

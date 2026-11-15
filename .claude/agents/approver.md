@@ -56,7 +56,18 @@ ESCALATE if any of them fails, or if the change:
   as pricing, public copy about the business, or what is free versus paid;
 - changes the factory itself: anything under `.claude/` or `factory/`.
 
-Tailor these lists to the project: what must a human always see here?
+In jomans-vault, also ESCALATE when the change:
+
+- touches encryption or key handling (the crypto package, DEK wrapping,
+  `VAULT_MASTER_KEY`, `kekVersion`): a mistake here can make every stored value
+  unreadable;
+- changes which principal can do what: API key permissions or scope,
+  `requireScope`, ownership checks, or the 404-vs-403 rules;
+- adds or changes any path that returns plaintext values (`reveal`, `inject`,
+  export, `jv run`, MCP tools), or could put a value into logs or audit events;
+- changes the audit log's schema or what gets audited;
+- changes lint, format or TypeScript config (`oxlint.config.ts`,
+  `oxfmt.config.ts`, `tsconfig*.json`) in a way that loosens checks.
 
 ## Write decision.md
 
