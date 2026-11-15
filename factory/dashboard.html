@@ -473,21 +473,30 @@ async function poll() {
   try {
     const config = JSON.parse(await fetchText('config.json'))
     prLabel = config.forge?.type === 'gitlab' ? 'MR' : 'PR'
-    jobs = await loadJobs()
+    const loaded = await loadJobs()
+    jobs = loaded.jobs
     await render()
     if (openJobId) await refreshDrawer()
-    status.className = 'status'
-    status.innerHTML = `<span class="dot"></span>jobs/ · ${new Date().toLocaleTimeString()}`
+    const time = new Date().toLocaleTimeString()
+    if (loaded.unreadable.length) {
+      status.className = 'status error'
+      status.innerHTML = `<span class="dot"></span>jobs/ · ${time} · could not read ${esc(loaded.unreadable.join(', '))}`
+    } else {
+      status.className = 'status'
+      status.innerHTML = `<span class="dot"></span>jobs/ · ${time}`
+    }
   } catch (err) {
     status.className = 'status error'
     status.innerHTML = `<span class="dot"></span>${esc(err.message)}`
   }
 }
 
-// factory/bin/job writes each jobs/<id>/job.json.
+// factory/bin/job writes each jobs/<id>/job.json. A job that can't be read is
+// left off the board but reported, so an incomplete board isn't mistaken for a
+// short queue.
 async function loadJobs() {
   let listing
-  try { listing = await fetchText('jobs/') } catch { return [] }
+  try { listing = await fetchText('jobs/') } catch { return { jobs: [], unreadable: [] } }
   const doc = new DOMParser().parseFromString(listing, 'text/html')
   const ids = [...doc.querySelectorAll('a')]
     .map((a) => decodeURIComponent(a.getAttribute('href')))
@@ -497,7 +506,10 @@ async function loadJobs() {
   const loaded = await Promise.all(ids.map(async (id) => {
     try { return JSON.parse(await fetchText(`jobs/${id}/job.json`)) } catch { return null }
   }))
-  return loaded.filter((job) => job !== null)
+  return {
+    jobs: loaded.filter((job) => job !== null),
+    unreadable: ids.filter((_, i) => loaded[i] === null),
+  }
 }
 
 // ---- Drawer --------------------------------------------------------------
