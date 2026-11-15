@@ -5,5 +5,11 @@ import tanstack from "ultracite/oxlint/tanstack";
 
 export default defineConfig({
   extends: [core, react, tanstack],
-  ignorePatterns: core.ignorePatterns,
+  ignorePatterns: [
+    ...(core.ignorePatterns ?? []),
+    "factory/**",
+    ".claude/**",
+    "packages/db/src/schema/auth.ts",
+    "packages/db/src/migrations/**",
+  ],
 });
