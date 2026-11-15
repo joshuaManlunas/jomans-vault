@@ -32,6 +32,26 @@ export const project = pgTable(
   ]
 );
 
+export const environment = pgTable(
+  "environment",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("environment_project_id_slug_unique").on(
+      table.projectId,
+      table.slug
+    ),
+  ]
+);
+
 export const projectKey = pgTable(
   "project_key",
   {

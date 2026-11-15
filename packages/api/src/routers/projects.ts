@@ -7,12 +7,8 @@ import * as z from "zod";
 import { authedProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
+import { isUniqueViolation, slug } from "./validation";
 
-const slug = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-z0-9-]+$/u);
 const name = z.string().trim().min(1).max(100);
 const projectOutput = z.object({
   slug: z.string(),
@@ -24,21 +20,6 @@ const projectOutput = z.object({
 const auditTarget = ({ output }: { output: unknown }) => ({
   projectId: z.object({ id: z.string() }).parse(output).id,
 });
-
-const isDuplicateSlug = (error: unknown): boolean => {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (
-    "code" in error &&
-    error.code === "23505" &&
-    "constraint" in error &&
-    error.constraint === "project_owner_id_slug_unique"
-  ) {
-    return true;
-  }
-  return isDuplicateSlug(error.cause);
-};
 
 export const projectsRouter = {
   create: authedProcedure
@@ -55,7 +36,7 @@ export const projectsRouter = {
           .values({ ...input, ownerId: context.principal.user.id })
           .returning();
       } catch (error) {
-        if (isDuplicateSlug(error)) {
+        if (isUniqueViolation(error, "project_owner_id_slug_unique")) {
           throw new ORPCError("CONFLICT");
         }
         throw error;
