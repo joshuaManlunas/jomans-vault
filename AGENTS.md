@@ -124,3 +124,9 @@ Oxlint + Oxfmt will catch most mechanical issues automatically. Focus your atten
 ---
 
 Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run `bunx ultracite fix` before committing to ensure compliance.
+
+<!-- factory:section -->
+## Software factory
+`/factory run` builds every open GitHub issue labeled `factory` through intake → spec → build → gate → review → GitHub reviews → approve, one PR per issue. State is in `factory/jobs/` (gitignored); `factory/bin/job` is its only writer. Checks: `factory/checks.sh`. How it works: `factory/FACTORY.md`. Dashboard: `cd factory && python3 -m http.server`, then open http://localhost:8000/dashboard.html.
+Each job works in its own git worktree at `.worktrees/<job-id>` (gitignored); tools run from the repo root that don't read `.gitignore` should exclude `.worktrees/`.
+<!-- /factory:section -->

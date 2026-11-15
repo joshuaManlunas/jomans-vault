@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""Show and change which model each factory agent runs on: config.json
+`models`, `roles`, `routing` and `surface_reviewers`. /setup-factory drives it.
+
+Usage: models show [--default] [--available FILE]...
+       models catalog --available FILE...
+       models set <slot>=<provider>/<model>[:<option>=<value>,...]... --available FILE...
+       models reset
+
+A slot is one place config.json names a model: a role (`intake`), or a
+reviewer as `routing.<risk>.<reviewer>` or `surface_reviewers.<surface>.<reviewer>`.
+`show` lists every slot.
+
+FILE is the JSON T3's `orchestrator_capabilities` returned, saved verbatim;
+pass several (e.g. one per `search`) to merge them. A model is available when
+its provider can run child tasks for this orchestrator.
+
+`set` validates every assignment before writing any: the model must be
+available, each option one the model offers, no reviewer on Haiku, and a
+Claude model needs a price in `prices_usd_per_mtok`. `set` and `reset` reuse a
+profile with the same provider, model and options or add one, then drop
+added profiles that no slot and no job in factory/jobs uses. Both print the result.
+"""
+
+from contextlib import contextmanager
+import fcntl
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+FACTORY = Path(__file__).resolve().parents[1]
+CONFIG_PATH = FACTORY / "config.json"
+LOCK = FACTORY / "jobs" / ".config.lock"  # shared with factory/bin/route
+
+# The shipped setup. `show --default` prints it and `reset` restores it.
+DEFAULT = {
+    "models": {
+        "fable":  {"provider": "claudeAgent", "model": "claude-fable-5-2",  "options": {"effort": "high"}},
+        "opus":   {"provider": "claudeAgent", "model": "claude-opus-5-5",   "options": {"effort": "high"}},
+        "sol":    {"provider": "codex",       "model": "gpt-6.1-sol",       "options": {"reasoningEffort": "high"}},
+        "daybreak-blue": {"provider": "codex", "model": "gpt-daybreak-blue-latest",
+                          "options": {"reasoningEffort": "high", "cyberAccessProgram": "daybreakBlue"}},
+    },
+    "roles": {"intake": "fable", "spec-writer": "opus", "builder": "sol", "approver": "opus"},
+    "routing": {"low": {"code": "opus"}, "medium": {"code": "opus"}, "high": {"code": "opus"}},
+    "surface_reviewers": {"ui": {"ux": "opus", "ui": "opus"}, "security": {"security": "daybreak-blue"}},
+}
+EFFORT_KEYS = ("effort", "reasoningEffort", "thinking")
+NOT_A_FAMILY = {"latest", "default", "preview", "claude", "gpt", "anthropic", "openrouter"}
+
+
+def die(msg):
+    print(f"models: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def slots(cfg):
+    """Slot name -> path of keys to the profile name inside cfg."""
+    out = {role: ("roles", role) for role in cfg["roles"]}
+    for table in ("routing", "surface_reviewers"):
+        for key, reviewers in cfg[table].items():
+            for reviewer in reviewers:
+                out[f"{table}.{key}.{reviewer}"] = (table, key, reviewer)
+    return out
+
+
+def get(cfg, path):
+    for key in path:
+        cfg = cfg[key]
+    return cfg
+
+
+def put(cfg, path, value):
+    get(cfg, path[:-1])[path[-1]] = value
+
+
+def load_available(files):
+    """(provider, model) -> {option: [values]}, plus provider -> omitted model count."""
+    catalog, omitted = {}, {}
+    for f in files:
+        try:
+            data = json.loads(Path(f).read_text())
+        except (OSError, ValueError) as e:
+            die(f"can't read capabilities file {f}: {e}")
+        parent = data.get("inheritedProviderInstanceId")
+        for p in data.get("providers", []):
+            pid = p["providerInstanceId"]
+            if not p.get("canRunChildTask") or not (p.get("canRunCrossProviderChildTask") or pid == parent):
+                continue
+            for m in p.get("models", []):
+                catalog[(pid, m["id"])] = {o["id"]: o.get("values", []) for o in m.get("options", [])}
+            if p.get("omittedModels"):
+                omitted[pid] = max(omitted.get(pid, 0), p["omittedModels"])
+    return catalog, omitted
+
+
+def options_text(options):
+    return ",".join(f"{k}={json.dumps(v) if isinstance(v, bool) else v}" for k, v in options.items())
+
+
+def unavailable(profile, catalog):
+    """Why this session can't spawn the profile as saved, or "" when it can."""
+    offered = catalog.get((profile["provider"], profile["model"]))
+    if offered is None:
+        return "NOT AVAILABLE"
+    bad = [f"{k}={v}" for k, v in profile.get("options", {}).items() if k not in offered or v not in offered[k]]
+    return f"NOT AVAILABLE: {', '.join(bad)} not offered" if bad else ""
+
+
+def table(cfg, catalog=None):
+    rows = [("SLOT", "PROFILE", "PROVIDER/MODEL", "OPTIONS", "")]
+    for slot, path in slots(cfg).items():
+        name = get(cfg, path)
+        p = cfg["models"].get(name)
+        if p is None:
+            rows.append((slot, name, "?", "", "profile missing from models"))
+            continue
+        note = "" if catalog is None else unavailable(p, catalog)
+        rows.append((slot, name, f"{p['provider']}/{p['model']}", options_text(p.get("options", {})), note))
+    widths = [max(len(r[i]) for r in rows) for i in range(4)]
+    return "\n".join("  ".join(c.ljust(w) for c, w in zip(r[:4], widths)).rstrip() + ("  " + r[4] if r[4] else "")
+                     for r in rows)
+
+
+def parse_assignment(arg, cfg, catalog, slot_paths):
+    slot, eq, target = arg.partition("=")
+    if not eq or "/" not in target:
+        die(f"{arg!r}: write <slot>=<provider>/<model>[:<option>=<value>,...]")
+    if slot not in slot_paths:
+        die(f"unknown slot {slot!r}: use one of {', '.join(slot_paths)}")
+    head, colon, tail = target.rpartition(":")
+    if colon and "=" in tail:
+        target, opt_text = head, tail
+    else:
+        opt_text = ""
+    provider, _, model = target.partition("/")
+    offered = catalog.get((provider, model))
+    if offered is None:
+        die(f"{slot}: {provider}/{model} isn't available here (see: models catalog --available ...)")
+    options = {}
+    for pair in filter(None, opt_text.split(",")):
+        key, _, value = pair.partition("=")
+        if key not in offered:
+            die(f"{slot}: {model} has no option {key!r} ({', '.join(offered) or 'it takes none'})")
+        match = [v for v in offered[key] if str(v).lower() == value.lower()]
+        if not match:
+            die(f"{slot}: {key}={value} isn't offered by {model} ({'|'.join(map(str, offered[key]))})")
+        options[key] = match[0]
+    if slot_paths[slot][0] != "roles" and "haiku" in model:
+        die(f"{slot}: reviewers can't run on Haiku; its findings were too often wrong (factory/tests/test_routing.py)")
+    if provider == "claudeAgent" and model not in cfg.get("prices_usd_per_mtok", {}):
+        die(f"{slot}: {model} has no price in config.json prices_usd_per_mtok, so job cost would fail; add one first")
+    return slot, {"provider": provider, "model": model, "options": options}
+
+
+def family(model):
+    tokens = [t for t in re.split(r"[-/.:~_]", model) if t.isalpha() and t not in NOT_A_FAMILY]
+    return tokens[-1] if tokens else None
+
+
+def profile_for(cfg, profile):
+    for name, p in cfg["models"].items():
+        if (p["provider"], p["model"], p.get("options", {})) == (profile["provider"], profile["model"], profile["options"]):
+            return name
+    base = family(profile["model"]) or profile["provider"]
+    effort = next((str(profile["options"][k]) for k in EFFORT_KEYS if k in profile["options"]), None)
+    candidates = [base] + ([f"{base}-{effort}"] if effort else [])
+    stem, n = candidates[-1], 2
+    while all(c in cfg["models"] for c in candidates):
+        candidates, n = [f"{stem}-{n}"], n + 1
+    name = next(c for c in candidates if c not in cfg["models"])
+    cfg["models"][name] = profile
+    return name
+
+
+def job_profiles():
+    names = set()
+    for f in (FACTORY / "jobs").glob("*/job.json"):
+        try:
+            job = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        names.update(((job.get("agents") or {}).get("reviewers") or {}).values())
+    return names
+
+
+def prune(cfg):
+    keep = {get(cfg, path) for path in slots(cfg).values()} | job_profiles() | set(DEFAULT["models"])
+    cfg["models"] = {k: v for k, v in cfg["models"].items() if k in keep}
+
+
+def render(value, level=0, key=""):
+    """JSON in the config's hand-written style: a nested table expands, a short
+    entry stays on one line, so `set` leaves the rest of the file readable."""
+    def flat(v):
+        if isinstance(v, dict):
+            return "{ " + ", ".join(f"{json.dumps(k)}: {flat(x)}" for k, x in v.items()) + " }" if v else "{}"
+        if isinstance(v, list):
+            return "[" + ", ".join(flat(x) for x in v) + "]"
+        return json.dumps(v, ensure_ascii=False)
+    nested = isinstance(value, (dict, list)) and any(
+        isinstance(v, (dict, list)) for v in (value.values() if isinstance(value, dict) else value))
+    one_line = flat(value)
+    if not isinstance(value, (dict, list)) or (
+            level >= 2 or (level == 1 and not nested)) and 2 * level + len(key) + len(one_line) <= 140:
+        return one_line
+    pad, inner = "  " * level, "  " * (level + 1)
+    if isinstance(value, dict):
+        body = ",\n".join(f"{inner}{json.dumps(k)}: {render(v, level + 1, json.dumps(k) + ': ')}"
+                          for k, v in value.items())
+        return "{\n" + body + "\n" + pad + "}"
+    return "[\n" + ",\n".join(inner + render(v, level + 1) for v in value) + "\n" + pad + "]"
+
+
+def save(cfg):
+    tmp = CONFIG_PATH.with_suffix(".json.tmp")
+    tmp.write_text(render(cfg) + "\n")
+    os.replace(tmp, CONFIG_PATH)
+
+
+def split_available(argv):
+    files, rest = [], []
+    it = iter(argv)
+    for a in it:
+        if a == "--available":
+            files.append(next(it, None) or die("--available needs a file"))
+        else:
+            rest.append(a)
+    return files, rest
+
+
+def assign(cfg, assignments, catalog):
+    slot_paths = slots(cfg)
+    changes = [parse_assignment(a, cfg, catalog, slot_paths) for a in assignments]
+    for slot, profile in changes:
+        put(cfg, slot_paths[slot], profile_for(cfg, profile))
+
+
+def reset(cfg):
+    # A job routed to a profile keeps that profile's definition, even when
+    # it shares a default's name; the default then gets a new name.
+    default_slots, held = slots(DEFAULT), job_profiles()
+    restored = {}
+    for name, profile in DEFAULT["models"].items():
+        current = cfg["models"].get(name)
+        keep = current is not None and current != profile and name in held
+        restored[name] = current if keep else json.loads(json.dumps(profile))
+    cfg["models"] = restored | {k: v for k, v in cfg["models"].items() if k not in restored}
+    for slot, path in slots(cfg).items():
+        if slot in default_slots:
+            profile = DEFAULT["models"][get(DEFAULT, default_slots[slot])]
+            put(cfg, path, profile_for(cfg, json.loads(json.dumps(profile))))
+
+
+@contextmanager
+def config_lock():
+    """Held by `models set|reset` while rewriting config.json and by `route`
+    from reading it to recording a job's reviewers, so no profile a job is
+    being routed to gets pruned in between."""
+    LOCK.parent.mkdir(exist_ok=True)
+    with open(LOCK, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def main(argv):
+    if not argv:
+        die("usage: models show [--default] [--available FILE]... | catalog --available FILE... | "
+            "set <slot>=<provider>/<model>[:<opt>=<val>,...]... --available FILE... | reset")
+    cmd, (files, rest) = argv[0], split_available(argv[1:])
+    cfg = json.loads(CONFIG_PATH.read_text())
+    catalog, omitted = load_available(files) if files else (None, {})
+
+    if cmd == "show" and rest in ([], ["--default"]):
+        print(table(DEFAULT if rest else cfg, catalog))
+    elif cmd == "catalog" and not rest:
+        catalog is not None or die("catalog needs --available FILE")
+        for (provider, model), offered in sorted(catalog.items()):
+            opts = "  ".join(f"{k}={'|'.join(json.dumps(v) if isinstance(v, bool) else str(v) for v in vals)}"
+                             for k, vals in offered.items())
+            print(f"{provider}/{model}  {opts}".rstrip())
+        for provider, n in omitted.items():
+            print(f"({provider}: {n} more models not listed; orchestrator_capabilities with `search` finds them)")
+    elif (cmd == "set" and rest) or (cmd == "reset" and not rest):
+        cmd != "set" or catalog is not None or die("set needs --available FILE, so every model is checked")
+        with config_lock():
+            cfg = json.loads(CONFIG_PATH.read_text())
+            assign(cfg, rest, catalog) if cmd == "set" else reset(cfg)
+            prune(cfg)
+            save(cfg)
+        print(table(cfg, catalog))
+    else:
+        die(f"bad arguments: {' '.join(argv)} (run with no arguments for usage)")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

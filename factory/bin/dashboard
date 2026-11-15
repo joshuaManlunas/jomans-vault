@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Serve the factory dashboard as a detached process that outlives the session.
+
+Usage:
+  dashboard start     start serving factory/ on the configured port, or reuse a running dashboard
+  dashboard stop      stop the dashboard this script started
+  dashboard status    say whether it is running, and where
+
+The server runs in its own session (not a child of the caller), so it keeps
+running after a Claude Code session or a background-task time limit ends,
+until `dashboard stop` or a reboot. Its pid and log live in factory/jobs/
+(gitignored). Port and auto-open come from config.json `dashboard`
+(default {"port": 8000, "open": true}); FACTORY_DASHBOARD_PORT overrides the
+port. Prints one line: `dashboard: <url> (<state>)`.
+"""
+
+import json
+import os
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+FACTORY = Path(__file__).resolve().parents[1]
+JOBS = FACTORY / "jobs"
+PID_FILE = JOBS / ".dashboard.pid"
+LOG_FILE = JOBS / ".dashboard.log"
+TOKEN_FILE = JOBS / ".dashboard.token"
+HOST = "127.0.0.1"
+
+
+def die(msg):
+    print(f"dashboard: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def port():
+    config = json.loads((FACTORY / "config.json").read_text()).get("dashboard") or {}
+    return int(os.environ.get("FACTORY_DASHBOARD_PORT") or config.get("port", 8000))
+
+
+def url(p):
+    return f"http://{HOST}:{p}/dashboard.html"
+
+
+def listening(p):
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex((HOST, p)) == 0
+
+
+def serves_this_factory(p):
+    """True only when the server on port p serves this repo's factory/ directory.
+
+    Two repos can use the same port; HTML alone can't tell their dashboards
+    apart, so the server must hand back the random token this checkout wrote.
+    """
+    try:
+        token = TOKEN_FILE.read_text().strip()
+        with urllib.request.urlopen(f"http://{HOST}:{p}/jobs/{TOKEN_FILE.name}", timeout=2) as r:
+            return r.status == 200 and r.read().decode().strip() == token
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def our_pid():
+    """The pid we started, if that process is still our server for this checkout.
+
+    A pid file can outlive its process (reboot, crash) and the pid be reused by
+    an unrelated server, so the command line must serve this exact factory/.
+    """
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return None
+    cmd = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout.strip()
+    # start() always launches with `--directory <factory>` last; match it whole so
+    # a checkout path with spaces still identifies the server.
+    ours = " -m http.server " in cmd and cmd.endswith(f" --directory {FACTORY}")
+    return pid if ours else None
+
+
+def terminate(pid):
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and our_pid() == pid:
+        time.sleep(0.05)
+
+
+def start():
+    p = port()
+    if listening(p):
+        if serves_this_factory(p):
+            print(f"dashboard: {url(p)} (already running)")
+            return
+        die(f"port {p} is in use by something else (another app, or another repo's factory dashboard). "
+            "Fix: set config.json dashboard.port to a free port.")
+    previous = our_pid()
+    if previous is not None:
+        # The port changed since we last started one; keep a single managed server
+        # so `stop` can still reach it.
+        terminate(previous)
+        print(f"dashboard: stopped the previous server (pid {previous}) to move to port {p}")
+    JOBS.mkdir(parents=True, exist_ok=True)
+    TOKEN_FILE.write_text(secrets.token_hex(16) + "\n")
+    with open(LOG_FILE, "ab") as log:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "http.server", str(p), "--bind", HOST, "--directory", str(FACTORY)],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+            start_new_session=True,  # detached: survives the caller and its session
+        )
+    PID_FILE.write_text(f"{proc.pid}\n")
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            die(f"the server exited at once (code {proc.returncode}); see {LOG_FILE}")
+        if listening(p):
+            print(f"dashboard: {url(p)} (started, pid {proc.pid})")
+            return
+        time.sleep(0.05)
+    die(f"the server didn't start listening on port {p} within 5s; see {LOG_FILE}")
+
+
+def stop():
+    pid = our_pid()
+    if pid is None:
+        PID_FILE.unlink(missing_ok=True)
+        print("dashboard: not running (nothing this script started)")
+        return
+    terminate(pid)
+    PID_FILE.unlink(missing_ok=True)
+    print(f"dashboard: stopped (pid {pid})")
+
+
+def status():
+    p = port()
+    if serves_this_factory(p):
+        pid = our_pid()
+        print(f"dashboard: {url(p)} (running{f', pid {pid}' if pid else ', not started by this script'})")
+    else:
+        print(f"dashboard: not running for this repo (port {p})")
+
+
+def main(argv):
+    commands = {"start": start, "stop": stop, "status": status}
+    if len(argv) != 1 or argv[0] not in commands:
+        print(__doc__.strip())
+        sys.exit(0 if argv[:1] in (["-h"], ["--help"]) else 2)
+    commands[argv[0]]()
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
