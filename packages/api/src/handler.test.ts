@@ -155,7 +155,7 @@ test("private data accepts the cookie from real Better Auth sign-up", async () =
   });
 });
 
-test("the generated OpenAPI spec includes both REST operations", async () => {
+test("the generated OpenAPI spec includes all REST operations", async () => {
   const response = await handler(new Request(`${baseURL}/api/v1/spec.json`));
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({
@@ -177,7 +177,11 @@ test("the generated OpenAPI spec includes both REST operations", async () => {
       "/projects/{project}/envs/{env}/secrets/{key}": {
         get: expect.any(Object),
         put: expect.any(Object),
+        patch: expect.any(Object),
         delete: expect.any(Object),
+      },
+      "/projects/{project}/envs/{env}/secrets/{key}/rollback": {
+        post: expect.any(Object),
       },
       "/projects/{project}/envs/{env}/secrets/{key}/versions": {
         get: expect.any(Object),
@@ -2110,6 +2114,19 @@ test("a rejected audit insert rolls back secret sets and removals and suppresses
       await secretRequest("PUT", "secret-rollback", "dev", "EXISTING", {
         value: `${value}_updated`,
       }),
+      await secretRequest("PATCH", "secret-rollback", "dev", "EXISTING", {
+        value,
+        expectedVersion: 1,
+      }),
+      await secretRouteRequest(
+        "POST",
+        "secret-rollback",
+        "dev",
+        "/EXISTING/rollback",
+        {
+          version: 1,
+        }
+      ),
       await secretRequest("GET", "secret-rollback", "dev", "EXISTING"),
       await secretRequest("DELETE", "secret-rollback", "dev", "EXISTING"),
     ];
@@ -2137,18 +2154,23 @@ test("a rejected audit insert rolls back secret sets and removals and suppresses
 });
 
 const secretAccessRoutes = [
-  { method: "PUT", path: "/API_URL" },
-  { method: "GET", path: "/API_URL" },
-  { method: "DELETE", path: "/API_URL" },
-  { method: "GET", path: "" },
-  { method: "GET", path: "/API_URL/versions" },
+  { method: "PUT", path: "/API_URL", body: { value: "PRIVATE_SCOPE_MARKER" } },
+  {
+    method: "PATCH",
+    path: "/API_URL",
+    body: { value: "PRIVATE_SCOPE_MARKER", expectedVersion: 1 },
+  },
+  { method: "POST", path: "/API_URL/rollback", body: { version: 1 } },
+  { method: "GET", path: "/API_URL", body: undefined },
+  { method: "DELETE", path: "/API_URL", body: undefined },
+  { method: "GET", path: "", body: undefined },
+  { method: "GET", path: "/API_URL/versions", body: undefined },
 ];
 
 test.each(secretAccessRoutes)(
   "$method secrets$path hides unowned projects with byte-identical 404s",
-  async ({ method, path }) => {
+  async ({ method, path, body }) => {
     const before = await secretState();
-    const body = method === "PUT" ? { value: "private attack" } : undefined;
     const notOwned = await secretRouteRequest(
       method,
       "secret-vault",
@@ -2176,19 +2198,19 @@ test.each(secretAccessRoutes)(
 
 test.each([
   ...secretAccessRoutes.map((route) => ({ ...route, env: "missing" })),
-  { method: "GET", env: "dev", path: "/NEVER_SET" },
-  { method: "DELETE", env: "dev", path: "/NEVER_SET" },
-  { method: "GET", env: "dev", path: "/NEVER_SET/versions" },
+  { method: "GET", env: "dev", path: "/NEVER_SET", body: undefined },
+  { method: "DELETE", env: "dev", path: "/NEVER_SET", body: undefined },
+  { method: "GET", env: "dev", path: "/NEVER_SET/versions", body: undefined },
 ])(
   "$method on absent $env/secrets$path returns 404 without writes",
-  async ({ method, env, path }) => {
+  async ({ method, env, path, body }) => {
     const before = await secretState();
     const response = await secretRouteRequest(
       method,
       "secret-vault",
       env,
       path,
-      method === "PUT" ? { value: "private" } : undefined
+      body
     );
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({
@@ -2208,14 +2230,14 @@ test.each(
   ])
 )(
   "$method invalid secret scope $projectSlug/$env$path returns 400 without writes",
-  async ({ method, projectSlug, env, path }) => {
+  async ({ method, projectSlug, env, path, body }) => {
     const before = await secretState();
     const response = await secretRouteRequest(
       method,
       projectSlug,
       env,
       path,
-      method === "PUT" ? { value: "PRIVATE_SCOPE_MARKER" } : undefined
+      body
     );
     expect(response.status).toBe(400);
     const text = await response.text();
@@ -2237,12 +2259,17 @@ test.each(
           env: "dev",
           path: route.path.replace("API_URL", "bad"),
         },
-      ].map((path) => ({ cookie, method: route.method, ...path }))
+      ].map((path) => ({
+        cookie,
+        method: route.method,
+        body: route.body,
+        ...path,
+      }))
     )
   )
 )(
   "unauthenticated $method secret $projectSlug/$env$path rejects before validation or lookup",
-  async ({ cookie, method, projectSlug, env, path }) => {
+  async ({ cookie, method, projectSlug, env, path, body }) => {
     const before = await secretState();
     const baseline = await handler(
       new Request(`${baseURL}/api/v1/private-data`)
@@ -2252,7 +2279,7 @@ test.each(
       projectSlug,
       env,
       path,
-      method === "PUT" ? {} : undefined,
+      body === undefined ? undefined : {},
       cookie
     );
     expect(response.status).toBe(401);
@@ -2327,3 +2354,640 @@ test.each(["environment", "project"])(
     }
   }
 );
+
+const rollbackSecret = async (
+  projectSlug: string,
+  key: string,
+  version: number
+) =>
+  await secretRouteRequest("POST", projectSlug, "dev", `/${key}/rollback`, {
+    version,
+  });
+
+const createVersionedSecret = async (projectSlug: string) => {
+  const scope = await createSecretScope(projectSlug);
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "KEY", { value: "A" }),
+    "KEY",
+    1
+  );
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "KEY", { value: "B" }),
+    "KEY",
+    2
+  );
+  return {
+    ...scope,
+    row: firstRow(await secretRows(firstRow(scope.environments).id, "KEY")),
+  };
+};
+
+test("safe update preserves metadata, audits once and rejects stale or absent versions without writes", async () => {
+  const projectSlug = "safe-update";
+  const { projectRow, environments } = await createSecretScope(projectSlug);
+  const dev = firstRow(environments);
+  const initial = await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "KEY", {
+      value: "v1",
+      kind: "token",
+      description: "unchanged",
+    }),
+    "KEY",
+    1,
+    "token"
+  );
+  const before = await eventCount();
+  const updated = await expectSet(
+    await secretRequest("PATCH", projectSlug, "dev", "KEY", {
+      value: "v2",
+      expectedVersion: 1,
+      kind: "env",
+      description: "ignored",
+    }),
+    "KEY",
+    2,
+    "token"
+  );
+  expect(Date.parse(updated.updatedAt)).toBeGreaterThanOrEqual(
+    Date.parse(initial.updatedAt)
+  );
+  const row = firstRow(await secretRows(dev.id, "KEY"));
+  expect(row).toMatchObject({ kind: "token", description: "unchanged" });
+  const versions = await versionRows(row.id);
+  expect(versions[1]).toMatchObject({
+    createdByType: "user",
+    createdById: userA.id,
+  });
+  expect(row.currentVersionId).toBe(firstRow(versions.slice(1)).id);
+  expect(await eventCount()).toBe(before + 1);
+  const events = await db
+    .select()
+    .from(auditEvent)
+    .where(eq(auditEvent.secretId, row.id));
+  expect(
+    events.filter((event) => event.action === "secret.write")
+  ).toHaveLength(2);
+  expect(events).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        actorType: "user",
+        actorId: userA.id,
+        projectId: projectRow.id,
+        environmentId: dev.id,
+        secretId: row.id,
+        action: "secret.write",
+      }),
+    ])
+  );
+  const get = await secretRequest("GET", projectSlug, "dev", "KEY");
+  expect(get.status).toBe(200);
+  expect(await get.json()).toEqual({ key: "KEY", value: "v2", version: 2 });
+  const state = await secretState();
+  const stale = await secretRequest("PATCH", projectSlug, "dev", "KEY", {
+    value: "stale",
+    expectedVersion: 1,
+  });
+  expect(stale.status).toBe(409);
+  expect(await stale.json()).toEqual({
+    defined: false,
+    code: "CONFLICT",
+    status: 409,
+    message: "Conflict",
+  });
+  const absent = await secretRequest("PATCH", projectSlug, "dev", "NEVER_SET", {
+    value: "missing",
+    expectedVersion: 1,
+  });
+  expect(absent.status).toBe(404);
+  expect(await secretState()).toEqual(state);
+  const deletion = await secretRequest("DELETE", projectSlug, "dev", "KEY");
+  expect(deletion.status).toBe(204);
+  const removed = await secretState();
+  const removedPatch = await secretRequest("PATCH", projectSlug, "dev", "KEY", {
+    value: "removed",
+    expectedVersion: 2,
+  });
+  expect(removedPatch.status).toBe(404);
+  expect(await secretState()).toEqual(removed);
+});
+
+test("two safe updates with the same expected version commit exactly one version and audit event", async () => {
+  const projectSlug = "safe-update-race";
+  const { row } = await createVersionedSecret(projectSlug);
+  const before = await eventCount();
+  const responses = await Promise.all(
+    ["C", "D"].map(
+      async (value) =>
+        await secretRequest("PATCH", projectSlug, "dev", "KEY", {
+          value,
+          expectedVersion: 2,
+        })
+    )
+  );
+  expect(responses.map((response) => response.status).toSorted()).toEqual([
+    200, 409,
+  ]);
+  const versions = await versionRows(row.id);
+  expect(versions.map((version) => version.version)).toEqual([1, 2, 3]);
+  const updated = firstRow(await secretRows(row.environmentId, "KEY"));
+  expect(updated.currentVersionId).toBe(firstRow(versions.slice(2)).id);
+  expect(await eventCount()).toBe(before + 1);
+});
+
+test.each([1, 2])(
+  "rollback to version %s copies ciphertext, extends history and audits the caller",
+  async (version) => {
+    const projectSlug = `rollback-live-${version}`;
+    const { row, projectRow } = await createVersionedSecret(projectSlug);
+    const original = await versionRows(row.id);
+    const before = await eventCount();
+    const result = await expectSet(
+      await rollbackSecret(projectSlug, "KEY", version),
+      "KEY",
+      3
+    );
+    expect(Date.parse(result.updatedAt)).toBeGreaterThanOrEqual(
+      row.updatedAt.getTime()
+    );
+    const versions = await versionRows(row.id);
+    expect(versions.map((entry) => entry.version)).toEqual([1, 2, 3]);
+    expect(versions[2]).toMatchObject({
+      ciphertext: original[version - 1]?.ciphertext,
+      iv: original[version - 1]?.iv,
+      createdByType: "user",
+      createdById: userA.id,
+    });
+    const updated = firstRow(await secretRows(row.environmentId, "KEY"));
+    expect(updated.currentVersionId).toBe(firstRow(versions.slice(2)).id);
+    expect(await eventCount()).toBe(before + 1);
+    const events = await db
+      .select()
+      .from(auditEvent)
+      .where(
+        and(
+          eq(auditEvent.secretId, row.id),
+          eq(auditEvent.action, "secret.rollback")
+        )
+      );
+    expect(events).toHaveLength(1);
+    expect(firstRow(events)).toMatchObject({
+      actorType: "user",
+      actorId: userA.id,
+      projectId: projectRow.id,
+      environmentId: row.environmentId,
+      secretId: row.id,
+    });
+    const history = await secretMetadataRequest(projectSlug, "dev", "KEY");
+    expect(history.status).toBe(200);
+    expect(await history.json()).toEqual(
+      versions.map((entry) => ({
+        version: entry.version,
+        createdByType: entry.createdByType,
+        createdById: entry.createdById,
+        createdAt: entry.createdAt.toISOString(),
+      }))
+    );
+    const get = await secretRequest("GET", projectSlug, "dev", "KEY");
+    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual({
+      key: "KEY",
+      value: version === 1 ? "A" : "B",
+      version: 3,
+    });
+    const state = await secretState();
+    const missingVersion = await rollbackSecret(projectSlug, "KEY", 9);
+    const missingKey = await rollbackSecret(projectSlug, "NEVER_SET", 1);
+    expect(missingVersion.status).toBe(404);
+    expect(missingKey.status).toBe(404);
+    expect(await secretState()).toEqual(state);
+  }
+);
+
+test("rollback restores the original removed row and makes it visible again", async () => {
+  const projectSlug = "rollback-removed";
+  const { row } = await createVersionedSecret(projectSlug);
+  const deletion = await secretRequest("DELETE", projectSlug, "dev", "KEY");
+  expect(deletion.status).toBe(204);
+  await expectSet(await rollbackSecret(projectSlug, "KEY", 2), "KEY", 3);
+  const rows = await secretRows(row.environmentId, "KEY");
+  expect(rows).toHaveLength(1);
+  expect(firstRow(rows)).toMatchObject({ id: row.id, deletedAt: null });
+  expect(await versionRows(row.id)).toHaveLength(3);
+  const list = await secretMetadataRequest(projectSlug, "dev");
+  expect(list.status).toBe(200);
+  expect(await list.json()).toEqual([
+    expect.objectContaining({ key: "KEY", version: 3 }),
+  ]);
+  const get = await secretRequest("GET", projectSlug, "dev", "KEY");
+  expect(get.status).toBe(200);
+  expect(await get.json()).toEqual({ key: "KEY", value: "B", version: 3 });
+  const history = await secretMetadataRequest(projectSlug, "dev", "KEY");
+  expect(await history.json()).toHaveLength(3);
+});
+
+test("rollback uses live history rather than a removed life of the same key", async () => {
+  const projectSlug = "rollback-new-life";
+  const { row } = await createVersionedSecret(projectSlug);
+  const deletion = await secretRequest("DELETE", projectSlug, "dev", "KEY");
+  expect(deletion.status).toBe(204);
+  const removed = firstRow(await secretRows(row.environmentId, "KEY"));
+  const oldVersions = await versionRows(row.id);
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "KEY", { value: "fresh" }),
+    "KEY",
+    1
+  );
+  const state = await secretState();
+  const missingVersion = await rollbackSecret(projectSlug, "KEY", 2);
+  expect(missingVersion.status).toBe(404);
+  expect(await secretState()).toEqual(state);
+  await expectSet(await rollbackSecret(projectSlug, "KEY", 1), "KEY", 2);
+  const rows = await secretRows(row.environmentId, "KEY");
+  expect(rows.find((entry) => entry.id === row.id)).toEqual(removed);
+  expect(await versionRows(row.id)).toEqual(oldVersions);
+  const live = firstRow(rows.filter((entry) => entry.deletedAt === null));
+  expect(live.id).not.toBe(row.id);
+  expect(await versionRows(live.id)).toHaveLength(2);
+});
+
+test("two rollbacks of a removed key both serialize on the original row", async () => {
+  const projectSlug = "rollback-removed-race";
+  const { row } = await createVersionedSecret(projectSlug);
+  const deletion = await secretRequest("DELETE", projectSlug, "dev", "KEY");
+  expect(deletion.status).toBe(204);
+  const before = await eventCount();
+  const responses = await Promise.all([
+    rollbackSecret(projectSlug, "KEY", 1),
+    rollbackSecret(projectSlug, "KEY", 1),
+  ]);
+  expect(responses.map((response) => response.status)).toEqual([200, 200]);
+  const bodies = await Promise.all(
+    responses.map(async (response) =>
+      secretSetOutput.parse(await response.json())
+    )
+  );
+  expect(bodies.map((body) => body.version).toSorted()).toEqual([3, 4]);
+  const rows = await secretRows(row.environmentId, "KEY");
+  expect(rows).toHaveLength(1);
+  expect(firstRow(rows)).toMatchObject({ id: row.id, deletedAt: null });
+  const versions = await versionRows(row.id);
+  expect(versions.map((entry) => entry.version)).toEqual([1, 2, 3, 4]);
+  expect(await eventCount()).toBe(before + 2);
+  const events = await db
+    .select()
+    .from(auditEvent)
+    .where(
+      and(
+        eq(auditEvent.secretId, row.id),
+        eq(auditEvent.action, "secret.rollback")
+      )
+    );
+  expect(events).toHaveLength(2);
+});
+
+test("a restore that loses to a fresh set returns conflict and rolls back all writes", async () => {
+  const projectSlug = "rollback-set-race";
+  const { row } = await createVersionedSecret(projectSlug);
+  const deletion = await secretRequest("DELETE", projectSlug, "dev", "KEY");
+  expect(deletion.status).toBe(204);
+  const removed = firstRow(await secretRows(row.environmentId, "KEY"));
+  const versions = await versionRows(row.id);
+  const before = await eventCount();
+  const lock = await db.$client.connect();
+  let delayed: Promise<Response> | undefined;
+  try {
+    await db.execute(sql`
+      CREATE FUNCTION delay_secret_restore() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL THEN
+          PERFORM pg_advisory_xact_lock(22026);
+        END IF;
+        RETURN NEW;
+      END $$;
+      CREATE TRIGGER delay_secret_restore BEFORE UPDATE ON secret
+        FOR EACH ROW EXECUTE FUNCTION delay_secret_restore();
+    `);
+    await lock.query("SELECT pg_advisory_lock(22026)");
+    delayed = rollbackSecret(projectSlug, "KEY", 1);
+    let waiting = false;
+    /* oxlint-disable no-await-in-loop -- Observe the restore blocked in its trigger before issuing the competing set. */
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const result = await db.$client.query(`
+        SELECT 1 FROM pg_locks WHERE locktype = 'advisory'
+          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+          AND classid = 0 AND objid = 22026 AND NOT granted
+      `);
+      waiting = result.rows.length > 0;
+      if (waiting) {
+        break;
+      }
+      await Bun.sleep(10);
+    }
+    /* oxlint-enable no-await-in-loop */
+    expect(waiting).toBe(true);
+    await expectSet(
+      await secretRequest("PUT", projectSlug, "dev", "KEY", {
+        value: "new life",
+      }),
+      "KEY",
+      1
+    );
+    await lock.query("SELECT pg_advisory_unlock(22026)");
+    const response = await delayed;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      defined: false,
+      code: "CONFLICT",
+      status: 409,
+      message: "Conflict",
+    });
+    const rows = await secretRows(row.environmentId, "KEY");
+    expect(rows.find((entry) => entry.id === row.id)).toEqual(removed);
+    expect(rows.filter((entry) => entry.deletedAt === null)).toHaveLength(1);
+    expect(await versionRows(row.id)).toEqual(versions);
+    expect(await eventCount()).toBe(before + 1);
+    expect(
+      await db
+        .select()
+        .from(auditEvent)
+        .where(
+          and(
+            eq(auditEvent.secretId, row.id),
+            eq(auditEvent.action, "secret.rollback")
+          )
+        )
+    ).toEqual([]);
+  } finally {
+    await lock.query("SELECT pg_advisory_unlock_all()");
+    await delayed;
+    await db.execute(sql`
+      DROP TRIGGER IF EXISTS delay_secret_restore ON secret;
+      DROP FUNCTION IF EXISTS delay_secret_restore();
+    `);
+    lock.release();
+  }
+});
+
+test("safe update and rollback never return or log plaintext and store only encrypted values", async () => {
+  const projectSlug = "safe-private";
+  const { row } = await createVersionedSecret(projectSlug);
+  const value = `PRIVATE_SAFE_${crypto.randomUUID()}`;
+  const logs = spyConsole();
+  try {
+    const patch = await secretRequest("PATCH", projectSlug, "dev", "KEY", {
+      value,
+      expectedVersion: 2,
+    });
+    expect(patch.status).toBe(200);
+    expect(await patch.text()).not.toContain(value);
+    const rollback = await rollbackSecret(projectSlug, "KEY", 3);
+    expect(rollback.status).toBe(200);
+    expect(await rollback.text()).not.toContain(value);
+    const versions = await versionRows(row.id);
+    expect(versions[3]?.ciphertext).toEqual(versions[2]?.ciphertext);
+    expect(versions[3]?.iv).toEqual(versions[2]?.iv);
+    await Promise.all(
+      [secret, secretVersion, projectKey, auditEvent].map(async (table) => {
+        const result = await db.execute(
+          sql`SELECT row_to_json(t)::text AS text FROM ${table} AS t`
+        );
+        assert.ok(!Array.isArray(result));
+        for (const stored of result.rows) {
+          expect(
+            z.object({ text: z.string() }).parse(stored).text
+          ).not.toContain(value);
+        }
+      })
+    );
+    const bytes = await db.execute(sql`
+      SELECT position(convert_to(${value}, 'UTF8') in ciphertext) AS ciphertext,
+        position(convert_to(${value}, 'UTF8') in iv) AS iv FROM secret_version
+      UNION ALL
+      SELECT position(convert_to(${value}, 'UTF8') in wrapped_dek),
+        position(convert_to(${value}, 'UTF8') in iv) FROM project_key
+    `);
+    assert.ok(!Array.isArray(bytes));
+    for (const stored of bytes.rows) {
+      expect(stored).toEqual({ ciphertext: 0, iv: 0 });
+    }
+    for (const log of logs) {
+      expect(JSON.stringify(log.mock.calls)).not.toContain(value);
+    }
+  } finally {
+    for (const log of logs) {
+      log.mockRestore();
+    }
+  }
+});
+
+const secretMutationRoutes = [
+  {
+    method: "PATCH",
+    suffix: "",
+    field: "expectedVersion",
+    body: { value: "PRIVATE_INVALID_VALUE", expectedVersion: 1 },
+  },
+  {
+    method: "POST",
+    suffix: "/rollback",
+    field: "version",
+    body: { version: 1 },
+  },
+];
+
+test.each(
+  secretMutationRoutes.flatMap((route) =>
+    [0, -1, 1.5, "1", null, undefined, 2_147_483_648].map((version) => ({
+      ...route,
+      version,
+    }))
+  )
+)(
+  "$method rejects invalid $field $version without writes or input disclosure",
+  async ({ method, suffix, field, body, version }) => {
+    const before = await secretState();
+    const response = await secretRouteRequest(
+      method,
+      "secret-vault",
+      "dev",
+      `/API_URL${suffix}`,
+      { ...body, [field]: version }
+    );
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(JSON.parse(text)).toMatchObject({ code: "BAD_REQUEST" });
+    expect(text).not.toContain("PRIVATE_INVALID_VALUE");
+    expect(text).not.toContain('"input":');
+    expect(text).not.toContain(`"${field}":`);
+    expect(await secretState()).toEqual(before);
+  }
+);
+
+test.each(
+  secretMutationRoutes.flatMap((route) =>
+    ["lower", "1ABC", "BAD-KEY"].map((key) => ({ ...route, key }))
+  )
+)(
+  "$method rejects invalid secret key $key without writes",
+  async ({ method, suffix, body, key }) => {
+    const before = await secretState();
+    const response = await secretRouteRequest(
+      method,
+      "secret-vault",
+      "dev",
+      `/${key}${suffix}`,
+      body
+    );
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(JSON.parse(text)).toMatchObject({ code: "BAD_REQUEST" });
+    expect(text).not.toContain(key);
+    expect(text).not.toContain("PRIVATE_INVALID_VALUE");
+    expect(await secretState()).toEqual(before);
+  }
+);
+
+test.each([
+  { name: "oversize", value: `PRIVATE_TOO_BIG_${"é".repeat(32_768)}` },
+  { name: "lone surrogate", value: "PRIVATE_SURROGATE_\uD800" },
+  { name: "number", value: 123 },
+  { name: "missing", value: undefined },
+])(
+  "safe update rejects $name values without writes or logs",
+  async ({ value }) => {
+    const before = await secretState();
+    const logs = spyConsole();
+    try {
+      const response = await secretRequest(
+        "PATCH",
+        "secret-vault",
+        "dev",
+        "API_URL",
+        { value, expectedVersion: 1 }
+      );
+      expect(response.status).toBe(400);
+      const text = await response.text();
+      expect(JSON.parse(text)).toMatchObject({ code: "BAD_REQUEST" });
+      expect(text).not.toContain("PRIVATE_");
+      expect(await secretState()).toEqual(before);
+      for (const log of logs) {
+        expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE_");
+      }
+    } finally {
+      for (const log of logs) {
+        log.mockRestore();
+      }
+    }
+  }
+);
+
+test.each([false, true])(
+  "safe update, rollback, set and remove serialize without gaps or server errors (removed: %s)",
+  async (removed) => {
+    const projectSlug = `safe-mixed-${removed}`;
+    const { row } = await createVersionedSecret(projectSlug);
+    if (removed) {
+      const deletion = await secretRequest("DELETE", projectSlug, "dev", "KEY");
+      expect(deletion.status).toBe(204);
+    }
+    const before = await eventCount();
+    const responses = await Promise.all([
+      secretRequest("PATCH", projectSlug, "dev", "KEY", {
+        value: "safe",
+        expectedVersion: 2,
+      }),
+      rollbackSecret(projectSlug, "KEY", 1),
+      secretRequest("PUT", projectSlug, "dev", "KEY", { value: "set" }),
+      secretRequest("DELETE", projectSlug, "dev", "KEY"),
+    ]);
+    for (const response of responses) {
+      expect([200, 204, 404, 409]).toContain(response.status);
+    }
+    const rows = await secretRows(row.environmentId, "KEY");
+    expect(
+      rows.filter((entry) => entry.deletedAt === null).length
+    ).toBeLessThanOrEqual(1);
+    const histories = await Promise.all(
+      rows.map(async (entry) => {
+        const versions = await versionRows(entry.id);
+        expect(versions.map((version) => version.version)).toEqual(
+          versions.map((_, index) => index + 1)
+        );
+        expect(entry.currentVersionId).toBe(firstRow(versions.slice(-1)).id);
+        return versions;
+      })
+    );
+    expect(histories.flat()).toHaveLength(
+      2 + responses.filter((response) => response.status === 200).length
+    );
+    expect(await eventCount()).toBe(
+      before +
+        responses.filter((response) => [200, 204].includes(response.status))
+          .length
+    );
+  }
+);
+
+test("rollback selects the same removed history using removal, creation and id ordering", async () => {
+  const projectSlug = "rollback-history-order";
+  const { row } = await createVersionedSecret(projectSlug);
+  const source = firstRow(await versionRows(row.id));
+  const old = new Date("2025-01-01T00:00:00Z");
+  const recent = new Date("2025-02-01T00:00:00Z");
+  const candidates = [
+    { id: "rollback-z", deletedAt: old, createdAt: recent },
+    { id: "rollback-y", deletedAt: recent, createdAt: old },
+    { id: "rollback-a", deletedAt: recent, createdAt: recent },
+    { id: "rollback-b", deletedAt: recent, createdAt: recent },
+  ];
+  await db.insert(secret).values(
+    candidates.map((candidate) => ({
+      ...candidate,
+      environmentId: row.environmentId,
+      key: "HISTORY",
+      kind: "token",
+    }))
+  );
+  await db.insert(secretVersion).values(
+    candidates.map((candidate, index) => ({
+      secretId: candidate.id,
+      version: index + 1,
+      ciphertext: source.ciphertext,
+      iv: source.iv,
+      createdByType: "user",
+      createdById: userA.id,
+    }))
+  );
+  const before = await secretRows(row.environmentId, "HISTORY");
+  const oldVersions = await Promise.all(
+    candidates
+      .slice(0, 3)
+      .map(async (candidate) => await versionRows(candidate.id))
+  );
+  await expectSet(
+    await rollbackSecret(projectSlug, "HISTORY", 4),
+    "HISTORY",
+    5,
+    "token"
+  );
+  const after = await secretRows(row.environmentId, "HISTORY");
+  expect(after.filter((candidate) => candidate.id !== "rollback-b")).toEqual(
+    before.filter((candidate) => candidate.id !== "rollback-b")
+  );
+  expect(
+    after.find((candidate) => candidate.id === "rollback-b")
+  ).toMatchObject({ deletedAt: null });
+  expect(
+    await Promise.all(
+      candidates
+        .slice(0, 3)
+        .map(async (candidate) => await versionRows(candidate.id))
+    )
+  ).toEqual(oldVersions);
+  const history = await secretMetadataRequest(projectSlug, "dev", "HISTORY");
+  expect(history.status).toBe(200);
+  expect(await history.json()).toHaveLength(2);
+  const get = await secretRequest("GET", projectSlug, "dev", "HISTORY");
+  expect(get.status).toBe(200);
+  expect(await get.json()).toEqual({ key: "HISTORY", value: "A", version: 5 });
+});

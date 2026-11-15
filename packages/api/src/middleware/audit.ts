@@ -8,6 +8,7 @@ export type AuditAction =
   | "project.delete"
   | "environment.create"
   | "environment.delete"
+  | "secret.rollback"
   | "secret.write"
   | "secret.delete"
   | "secret.reveal";
