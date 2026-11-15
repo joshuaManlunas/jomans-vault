@@ -10,7 +10,7 @@ import {
   secretVersion,
 } from "@jomans-vault/db/schema/vault";
 import { ORPCError } from "@orpc/server";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import * as z from "zod";
 
 import type { Context } from "../context";
@@ -61,6 +61,137 @@ const projectDek = async (context: Context, projectId: string) => {
 };
 
 export const secretsRouter = {
+  list: authedProcedure
+    .route({
+      method: "GET",
+      path: "/projects/{project}/envs/{env}/secrets",
+    })
+    .input(z.object({ project: slug, env: slug }))
+    .output(
+      z.array(
+        z.object({
+          key: z.string(),
+          kind: z.string().pipe(z.enum(["secret", "env", "token"])),
+          version: z.number(),
+          updatedAt: z.date().transform((date) => date.toISOString()),
+        })
+      )
+    )
+    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .handler(async ({ context }) => {
+      if (!context.environment) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      return await context.db
+        .select({
+          key: secret.key,
+          kind: secret.kind,
+          version: secretVersion.version,
+          updatedAt: secret.updatedAt,
+        })
+        .from(secret)
+        .innerJoin(secretVersion, eq(secret.currentVersionId, secretVersion.id))
+        .where(
+          and(
+            eq(secret.environmentId, context.environment.id),
+            isNull(secret.deletedAt)
+          )
+        )
+        .orderBy(asc(secret.key));
+    }),
+  delete: authedProcedure
+    .route({
+      method: "DELETE",
+      path: "/projects/{project}/envs/{env}/secrets/{key}",
+      successStatus: 204,
+    })
+    .input(pathInput)
+    .output(
+      z
+        .object({
+          projectId: z.string(),
+          environmentId: z.string(),
+          secretId: z.string(),
+        })
+        .transform(() => {
+          // A 204 response discards the internal audit target.
+        })
+    )
+    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(audit("secret.delete", auditTarget))
+    .handler(async ({ context, input }) => {
+      if (!context.environment) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const [deleted] = await context.db
+        .update(secret)
+        .set({ deletedAt: sql`clock_timestamp()` })
+        .where(
+          and(
+            eq(secret.environmentId, context.environment.id),
+            eq(secret.key, input.key),
+            isNull(secret.deletedAt)
+          )
+        )
+        .returning({
+          secretId: secret.id,
+          environmentId: secret.environmentId,
+        });
+      if (!deleted) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      return { ...deleted, projectId: context.project.id };
+    }),
+  versions: authedProcedure
+    .route({
+      method: "GET",
+      path: "/projects/{project}/envs/{env}/secrets/{key}/versions",
+    })
+    .input(pathInput)
+    .output(
+      z.array(
+        z.object({
+          version: z.number(),
+          createdByType: z.string(),
+          createdById: z.string(),
+          createdAt: z.date().transform((date) => date.toISOString()),
+        })
+      )
+    )
+    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .handler(async ({ context, input }) => {
+      if (!context.environment) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const [row] = await context.db
+        .select({ id: secret.id })
+        .from(secret)
+        .where(
+          and(
+            eq(secret.environmentId, context.environment.id),
+            eq(secret.key, input.key)
+          )
+        )
+        .orderBy(
+          sql`${secret.deletedAt} DESC NULLS FIRST`,
+          desc(secret.createdAt),
+          desc(secret.id)
+        )
+        .limit(1);
+      if (!row) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      return await context.db
+        .select({
+          version: secretVersion.version,
+          createdByType: secretVersion.createdByType,
+          createdById: secretVersion.createdById,
+          createdAt: secretVersion.createdAt,
+        })
+        .from(secretVersion)
+        .where(eq(secretVersion.secretId, row.id))
+        .orderBy(asc(secretVersion.version));
+    }),
   set: authedProcedure
     .route({
       method: "PUT",

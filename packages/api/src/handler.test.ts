@@ -173,9 +173,14 @@ test("the generated OpenAPI spec includes both REST operations", async () => {
         post: expect.any(Object),
       },
       "/projects/{project}/envs/{env}": { delete: expect.any(Object) },
+      "/projects/{project}/envs/{env}/secrets": { get: expect.any(Object) },
       "/projects/{project}/envs/{env}/secrets/{key}": {
         get: expect.any(Object),
         put: expect.any(Object),
+        delete: expect.any(Object),
+      },
+      "/projects/{project}/envs/{env}/secrets/{key}/versions": {
+        get: expect.any(Object),
       },
     },
   });
@@ -675,6 +680,32 @@ const environmentRequest = async (
   body?: unknown,
   cookie = userA.cookie
 ) => await projectRequest(method, `/${projectSlug}/envs${path}`, body, cookie);
+const secretRouteRequest = async (
+  method: string,
+  projectSlug: string,
+  env: string,
+  path: string,
+  body?: unknown,
+  cookie = userA.cookie
+) =>
+  await environmentRequest(
+    method,
+    projectSlug,
+    `/${encodeURIComponent(env)}/secrets${path}`,
+    body,
+    cookie
+  );
+const secretMetadataRequest = async (
+  projectSlug: string,
+  env: string,
+  key?: string
+) =>
+  await secretRouteRequest(
+    "GET",
+    projectSlug,
+    env,
+    key === undefined ? "" : `/${encodeURIComponent(key)}/versions`
+  );
 const secretRequest = async (
   method: string,
   projectSlug: string,
@@ -683,10 +714,11 @@ const secretRequest = async (
   body?: unknown,
   cookie = userA.cookie
 ) =>
-  await environmentRequest(
+  await secretRouteRequest(
     method,
     projectSlug,
-    `/${encodeURIComponent(env)}/secrets/${encodeURIComponent(key)}`,
+    env,
+    `/${encodeURIComponent(key)}`,
     body,
     cookie
   );
@@ -1188,6 +1220,333 @@ test("secrets set and get three encrypted versions with exact public shapes", as
     });
   }
 });
+
+test("secret lists return only sorted live metadata in the scoped environment", async () => {
+  await createSecretScope("secret-list", ["dev", "prod", "empty"]);
+  await createSecretScope("secret-list-other");
+  const values = ["PRIVATE_LIST_A", "PRIVATE_LIST_B"];
+  const outputs = await Promise.all(
+    [
+      {
+        projectSlug: "secret-list",
+        env: "dev",
+        key: "B_KEY",
+        value: values[1],
+      },
+      {
+        projectSlug: "secret-list",
+        env: "dev",
+        key: "A_KEY",
+        value: values[0],
+      },
+      {
+        projectSlug: "secret-list",
+        env: "prod",
+        key: "PROD",
+        value: "private prod",
+      },
+      {
+        projectSlug: "secret-list-other",
+        env: "dev",
+        key: "OTHER",
+        value: "private other",
+      },
+    ].map(
+      async ({ projectSlug, env, key, value }) =>
+        await expectSet(
+          await secretRequest("PUT", projectSlug, env, key, {
+            value,
+            kind: "env",
+          }),
+          key,
+          1,
+          "env"
+        )
+    )
+  );
+  const updated = await expectSet(
+    await secretRequest("PUT", "secret-list", "dev", "B_KEY", {
+      value: values[1],
+    }),
+    "B_KEY",
+    2,
+    "env"
+  );
+  const before = await secretState();
+  const response = await secretMetadataRequest("secret-list", "dev");
+  expect(response.status).toBe(200);
+  const text = await response.text();
+  for (const value of values) {
+    expect(text).not.toContain(value);
+  }
+  const body = z
+    .array(
+      z.strictObject({
+        key: z.string(),
+        kind: z.enum(["secret", "env", "token"]),
+        version: z.number(),
+        updatedAt: z.iso.datetime(),
+      })
+    )
+    .parse(JSON.parse(text));
+  expect(body).toEqual([
+    {
+      key: "A_KEY",
+      kind: "env",
+      version: 1,
+      updatedAt: firstRow(outputs.slice(1)).updatedAt,
+    },
+    {
+      key: "B_KEY",
+      kind: "env",
+      version: 2,
+      updatedAt: updated.updatedAt,
+    },
+  ]);
+  for (const row of body) {
+    expect(Object.keys(row).toSorted()).toEqual([
+      "key",
+      "kind",
+      "updatedAt",
+      "version",
+    ]);
+  }
+  const empty = await secretMetadataRequest("secret-list", "empty");
+  expect(empty.status).toBe(200);
+  expect(await empty.json()).toEqual([]);
+  expect(await secretState()).toEqual(before);
+});
+
+test("secret removal preserves history, audits once and allows a new life at version one", async () => {
+  const projectSlug = "secret-remove";
+  const { projectRow, environments } = await createSecretScope(projectSlug);
+  const dev = firstRow(environments);
+  const firstValue = "PRIVATE_REMOVE_FIRST";
+  const secondValue = "PRIVATE_REMOVE_SECOND";
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "A_KEY", {
+      value: firstValue,
+    }),
+    "A_KEY",
+    1
+  );
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "A_KEY", {
+      value: secondValue,
+    }),
+    "A_KEY",
+    2
+  );
+  const row = firstRow(await secretRows(dev.id, "A_KEY"));
+  const storedVersions = await versionRows(row.id);
+  const beforeReads = await secretState();
+  const history = await secretMetadataRequest(projectSlug, "dev", "A_KEY");
+  expect(history.status).toBe(200);
+  const historyText = await history.text();
+  expect(historyText).not.toContain(firstValue);
+  expect(historyText).not.toContain(secondValue);
+  const historyBody = z
+    .array(
+      z.strictObject({
+        version: z.number(),
+        createdByType: z.string(),
+        createdById: z.string(),
+        createdAt: z.iso.datetime(),
+      })
+    )
+    .parse(JSON.parse(historyText));
+  expect(historyBody).toEqual(
+    storedVersions.map((version) => ({
+      version: version.version,
+      createdByType: "user",
+      createdById: userA.id,
+      createdAt: version.createdAt.toISOString(),
+    }))
+  );
+  expect(historyBody.map((version) => version.version)).toEqual([1, 2]);
+  for (const version of historyBody) {
+    expect(Object.keys(version).toSorted()).toEqual([
+      "createdAt",
+      "createdById",
+      "createdByType",
+      "version",
+    ]);
+  }
+  expect(await secretState()).toEqual(beforeReads);
+  const beforeDelete = await eventCount();
+  const removed = await secretRequest("DELETE", projectSlug, "dev", "A_KEY");
+  expect(removed.status).toBe(204);
+  expect(await removed.text()).toBe("");
+  expect(await eventCount()).toBe(beforeDelete + 1);
+  const removedRow = firstRow(await secretRows(dev.id, "A_KEY"));
+  expect(removedRow.deletedAt).toBeInstanceOf(Date);
+  expect(removedRow).toEqual({ ...row, deletedAt: expect.any(Date) });
+  expect(await versionRows(row.id)).toEqual(storedVersions);
+  const events = await db
+    .select()
+    .from(auditEvent)
+    .where(
+      and(
+        eq(auditEvent.secretId, row.id),
+        eq(auditEvent.action, "secret.delete")
+      )
+    );
+  expect(events).toHaveLength(1);
+  expect(firstRow(events)).toMatchObject({
+    action: "secret.delete",
+    actorType: "user",
+    actorId: userA.id,
+    projectId: projectRow.id,
+    environmentId: dev.id,
+    secretId: row.id,
+    ip: "192.0.2.1",
+    userAgent: "Vault API test",
+  });
+  const afterDelete = await secretState();
+  const listed = await secretMetadataRequest(projectSlug, "dev");
+  expect(listed.status).toBe(200);
+  expect(await listed.json()).toEqual([]);
+  const removedHistory = await secretMetadataRequest(
+    projectSlug,
+    "dev",
+    "A_KEY"
+  );
+  expect(removedHistory.status).toBe(200);
+  expect(await removedHistory.json()).toEqual(historyBody);
+  const failures = await Promise.all([
+    secretRequest("GET", projectSlug, "dev", "A_KEY"),
+    secretRequest("DELETE", projectSlug, "dev", "A_KEY"),
+    secretRequest("DELETE", projectSlug, "dev", "NEVER_SET"),
+    secretMetadataRequest(projectSlug, "dev", "NEVER_SET"),
+  ]);
+  for (const response of failures) {
+    expect(response.status).toBe(404);
+  }
+  expect(await secretState()).toEqual(afterDelete);
+  const newValue = "PRIVATE_REMOVE_NEW";
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "A_KEY", {
+      value: newValue,
+    }),
+    "A_KEY",
+    1
+  );
+  const get = await secretRequest("GET", projectSlug, "dev", "A_KEY");
+  expect(get.status).toBe(200);
+  expect(await get.json()).toEqual({
+    key: "A_KEY",
+    value: newValue,
+    version: 1,
+  });
+  const beforeNewHistory = await secretState();
+  const newHistory = await secretMetadataRequest(projectSlug, "dev", "A_KEY");
+  expect(newHistory.status).toBe(200);
+  expect(
+    z
+      .array(z.object({ version: z.number() }))
+      .parse(await newHistory.json())
+      .map((version) => version.version)
+  ).toEqual([1]);
+  expect(await secretState()).toEqual(beforeNewHistory);
+  const rows = await secretRows(dev.id, "A_KEY");
+  expect(rows).toHaveLength(2);
+  expect(rows.find((item) => item.id === row.id)).toEqual(removedRow);
+  const live = firstRow(rows.filter((item) => item.deletedAt === null));
+  expect(await versionRows(live.id)).toHaveLength(1);
+  expect(await versionRows(row.id)).toEqual(storedVersions);
+  const allEvents = JSON.stringify(await auditRows());
+  for (const value of [firstValue, secondValue, newValue]) {
+    expect(allEvents).not.toContain(value);
+  }
+});
+
+test("removed secret history uses removal time, creation time and id tie breakers", async () => {
+  const projectSlug = "secret-history-order";
+  const { environments } = await createSecretScope(projectSlug);
+  const environmentId = firstRow(environments).id;
+  const old = new Date("2025-01-01T00:00:00Z");
+  const recent = new Date("2025-02-01T00:00:00Z");
+  const rows = [
+    { id: "history-z", deletedAt: old, createdAt: recent },
+    { id: "history-y", deletedAt: recent, createdAt: old },
+    { id: "history-a", deletedAt: recent, createdAt: recent },
+    { id: "history-b", deletedAt: recent, createdAt: recent },
+  ];
+  await db.insert(secret).values(
+    rows.map((row) => ({
+      ...row,
+      environmentId,
+      key: "HISTORY",
+      kind: "secret",
+    }))
+  );
+  await db.insert(secretVersion).values(
+    rows.map((row, index) => ({
+      secretId: row.id,
+      version: index + 1,
+      ciphertext: Buffer.from("encrypted fixture"),
+      iv: Buffer.alloc(12),
+      createdByType: "user",
+      createdById: userA.id,
+    }))
+  );
+  const before = await secretState();
+  const response = await secretMetadataRequest(projectSlug, "dev", "HISTORY");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([
+    {
+      version: 4,
+      createdByType: "user",
+      createdById: userA.id,
+      createdAt: firstRow(
+        await versionRows("history-b")
+      ).createdAt.toISOString(),
+    },
+  ]);
+  expect(await secretState()).toEqual(before);
+});
+
+test("concurrent secret removals change one row and write one audit event", async () => {
+  const projectSlug = "secret-remove-race";
+  const { environments } = await createSecretScope(projectSlug);
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "RACE", {
+      value: "private race",
+    }),
+    "RACE",
+    1
+  );
+  const row = firstRow(await secretRows(firstRow(environments).id));
+  const versions = await versionRows(row.id);
+  const before = await eventCount();
+  const responses = await Promise.all([
+    secretRequest("DELETE", projectSlug, "dev", "RACE"),
+    secretRequest("DELETE", projectSlug, "dev", "RACE"),
+  ]);
+  expect(responses.map((response) => response.status).toSorted()).toEqual([
+    204, 404,
+  ]);
+  expect(await eventCount()).toBe(before + 1);
+  expect(await versionRows(row.id)).toEqual(versions);
+});
+
+test.each(["lower", "1ABC", "BAD-KEY"])(
+  "remove and history reject invalid key %s without writes",
+  async (key) => {
+    const before = await secretState();
+    const responses = await Promise.all([
+      secretRequest("DELETE", "secret-vault", "dev", key),
+      secretMetadataRequest("secret-vault", "dev", key),
+    ]);
+    await Promise.all(
+      responses.map(async (response) => {
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ code: "BAD_REQUEST" });
+      })
+    );
+    expect(await secretState()).toEqual(before);
+  }
+);
 
 test("secrets with the same key are isolated by environment and project", async () => {
   const { environments } = await createSecretScope("secret-other");
@@ -1732,7 +2091,7 @@ test("secret write and reveal each record exactly one internal audit target", as
   }
 });
 
-test("a rejected audit insert rolls back secret sets and suppresses revealed values and logs", async () => {
+test("a rejected audit insert rolls back secret sets and removals and suppresses revealed values and logs", async () => {
   await createSecretScope("secret-rollback");
   const value = `PRIVATE_ROLLBACK_${crypto.randomUUID()}`;
   await expectSet(
@@ -1752,6 +2111,7 @@ test("a rejected audit insert rolls back secret sets and suppresses revealed val
         value: `${value}_updated`,
       }),
       await secretRequest("GET", "secret-rollback", "dev", "EXISTING"),
+      await secretRequest("DELETE", "secret-rollback", "dev", "EXISTING"),
     ];
     for (const response of responses) {
       expect(response.status).toBe(500);
@@ -1776,24 +2136,32 @@ test("a rejected audit insert rolls back secret sets and suppresses revealed val
   }
 });
 
-test.each(["PUT", "GET"])(
-  "%s secrets hides unowned projects with byte-identical 404s",
-  async (method) => {
+const secretAccessRoutes = [
+  { method: "PUT", path: "/API_URL" },
+  { method: "GET", path: "/API_URL" },
+  { method: "DELETE", path: "/API_URL" },
+  { method: "GET", path: "" },
+  { method: "GET", path: "/API_URL/versions" },
+];
+
+test.each(secretAccessRoutes)(
+  "$method secrets$path hides unowned projects with byte-identical 404s",
+  async ({ method, path }) => {
     const before = await secretState();
     const body = method === "PUT" ? { value: "private attack" } : undefined;
-    const notOwned = await secretRequest(
+    const notOwned = await secretRouteRequest(
       method,
       "secret-vault",
       "dev",
-      "API_URL",
+      path,
       body,
       userB.cookie
     );
-    const absent = await secretRequest(
+    const absent = await secretRouteRequest(
       method,
       "nobody-owns-this",
       "dev",
-      "API_URL",
+      path,
       body,
       userB.cookie
     );
@@ -1807,18 +2175,19 @@ test.each(["PUT", "GET"])(
 );
 
 test.each([
-  { method: "GET", env: "missing", key: "API_URL" },
-  { method: "PUT", env: "missing", key: "API_URL" },
-  { method: "GET", env: "dev", key: "NEVER_SET" },
+  ...secretAccessRoutes.map((route) => ({ ...route, env: "missing" })),
+  { method: "GET", env: "dev", path: "/NEVER_SET" },
+  { method: "DELETE", env: "dev", path: "/NEVER_SET" },
+  { method: "GET", env: "dev", path: "/NEVER_SET/versions" },
 ])(
-  "$method on absent $env/$key returns 404 without writes",
-  async ({ method, env, key }) => {
+  "$method on absent $env/secrets$path returns 404 without writes",
+  async ({ method, env, path }) => {
     const before = await secretState();
-    const response = await secretRequest(
+    const response = await secretRouteRequest(
       method,
       "secret-vault",
       env,
-      key,
+      path,
       method === "PUT" ? { value: "private" } : undefined
     );
     expect(response.status).toBe(404);
@@ -1833,19 +2202,19 @@ test.each([
 );
 
 test.each(
-  ["PUT", "GET"].flatMap((method) => [
-    { method, projectSlug: "Bad", env: "dev", key: "API_URL" },
-    { method, projectSlug: "secret-vault", env: "Bad", key: "API_URL" },
+  secretAccessRoutes.flatMap((route) => [
+    { ...route, projectSlug: "Bad", env: "dev" },
+    { ...route, projectSlug: "secret-vault", env: "Bad" },
   ])
 )(
-  "$method invalid secret scope $projectSlug/$env returns 400 without writes",
-  async ({ method, projectSlug, env, key }) => {
+  "$method invalid secret scope $projectSlug/$env$path returns 400 without writes",
+  async ({ method, projectSlug, env, path }) => {
     const before = await secretState();
-    const response = await secretRequest(
+    const response = await secretRouteRequest(
       method,
       projectSlug,
       env,
-      key,
+      path,
       method === "PUT" ? { value: "PRIVATE_SCOPE_MARKER" } : undefined
     );
     expect(response.status).toBe(400);
@@ -1858,27 +2227,31 @@ test.each(
 
 test.each(
   ["", unknownCookie].flatMap((cookie) =>
-    ["PUT", "GET"].flatMap((method) =>
+    secretAccessRoutes.flatMap((route) =>
       [
-        { projectSlug: "secret-vault", env: "dev", key: "API_URL" },
-        { projectSlug: "Bad", env: "dev", key: "API_URL" },
-        { projectSlug: "secret-vault", env: "Bad", key: "API_URL" },
-        { projectSlug: "secret-vault", env: "dev", key: "bad" },
-      ].map((path) => ({ cookie, method, ...path }))
+        { projectSlug: "secret-vault", env: "dev", path: route.path },
+        { projectSlug: "Bad", env: "dev", path: route.path },
+        { projectSlug: "secret-vault", env: "Bad", path: route.path },
+        {
+          projectSlug: "secret-vault",
+          env: "dev",
+          path: route.path.replace("API_URL", "bad"),
+        },
+      ].map((path) => ({ cookie, method: route.method, ...path }))
     )
   )
 )(
-  "unauthenticated $method secret $projectSlug/$env/$key rejects before validation or lookup",
-  async ({ cookie, method, projectSlug, env, key }) => {
+  "unauthenticated $method secret $projectSlug/$env$path rejects before validation or lookup",
+  async ({ cookie, method, projectSlug, env, path }) => {
     const before = await secretState();
     const baseline = await handler(
       new Request(`${baseURL}/api/v1/private-data`)
     );
-    const response = await secretRequest(
+    const response = await secretRouteRequest(
       method,
       projectSlug,
       env,
-      key,
+      path,
       method === "PUT" ? {} : undefined,
       cookie
     );
