@@ -126,6 +126,7 @@ export const NewSecretDialog = ({
       </div>
       {children}
       <DialogContent
+        className="max-h-[calc(100svh-2rem)] overflow-y-auto"
         initialFocus={keyInput}
         finalFocus={() =>
           created.current || !opener.current?.isConnected
@@ -140,7 +141,7 @@ export const NewSecretDialog = ({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="flex flex-col gap-4"
+          className="flex min-w-0 flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -180,7 +181,7 @@ export const NewSecretDialog = ({
                 <Textarea
                   id="secret-value"
                   rows={5}
-                  className="min-h-32"
+                  className="max-h-64 min-h-32 overflow-y-auto"
                   name={field.name}
                   value={field.state.value}
                   onBlur={field.handleBlur}

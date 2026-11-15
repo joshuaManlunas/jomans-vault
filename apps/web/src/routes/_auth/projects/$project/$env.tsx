@@ -70,13 +70,13 @@ const EnvironmentSecrets = () => {
           </EmptyContent>
         </Empty>
       ) : (
-        <Table className="table-fixed">
+        <Table className="min-w-160 table-fixed">
           <TableHeader>
             <TableRow>
-              <TableHead>Key</TableHead>
-              <TableHead>Kind</TableHead>
-              <TableHead>Version</TableHead>
-              <TableHead>Last update</TableHead>
+              <TableHead className="w-1/4">Key</TableHead>
+              <TableHead className="w-20">Kind</TableHead>
+              <TableHead className="w-16">Version</TableHead>
+              <TableHead className="w-36">Last update</TableHead>
               <TableHead>Value</TableHead>
             </TableRow>
           </TableHeader>
