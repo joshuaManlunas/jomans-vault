@@ -102,6 +102,7 @@ const EnvironmentSecrets = () => {
                     env={env}
                     secretKey={secret.key}
                     version={secret.version}
+                    updatedAt={secret.updatedAt}
                   />
                 </TableCell>
               </TableRow>

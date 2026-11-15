@@ -128,18 +128,20 @@ export const SecretValue = ({
   env,
   secretKey,
   version,
+  updatedAt,
 }: {
   project: string;
   env: string;
   secretKey: string;
   version: number;
+  updatedAt: string;
 }) => {
   const [changed, setChanged] = useState(false);
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <SecretValueControl
-        key={`${project}/${env}/${secretKey}/${version}`}
+        key={`${project}/${env}/${secretKey}/${version}/${updatedAt}`}
         project={project}
         env={env}
         secretKey={secretKey}
