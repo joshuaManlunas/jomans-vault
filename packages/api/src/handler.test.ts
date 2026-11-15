@@ -23,6 +23,7 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
+import { parse } from "dotenv";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
@@ -174,6 +175,25 @@ test("the generated OpenAPI spec includes all REST operations", async () => {
       },
       "/projects/{project}/envs/{env}": { delete: expect.any(Object) },
       "/projects/{project}/envs/{env}/secrets": { get: expect.any(Object) },
+      "/projects/{project}/envs/{env}/export": {
+        get: {
+          parameters: expect.arrayContaining([
+            expect.objectContaining({
+              name: "format",
+              in: "query",
+              schema: expect.objectContaining({ enum: ["json", "dotenv"] }),
+            }),
+          ]),
+          responses: {
+            "200": {
+              content: {
+                "application/json": expect.any(Object),
+                "text/plain; charset=utf-8": expect.any(Object),
+              },
+            },
+          },
+        },
+      },
       "/projects/{project}/envs/{env}/secrets/{key}": {
         get: expect.any(Object),
         put: expect.any(Object),
@@ -2991,3 +3011,409 @@ test("rollback selects the same removed history using removal, creation and id o
   expect(get.status).toBe(200);
   expect(await get.json()).toEqual({ key: "HISTORY", value: "A", version: 5 });
 });
+
+const exportRequest = async (
+  projectSlug: string,
+  env = "dev",
+  query = "",
+  cookie = userA.cookie
+) =>
+  await environmentRequest(
+    "GET",
+    projectSlug,
+    `/${encodeURIComponent(env)}/export${query}`,
+    undefined,
+    cookie
+  );
+const exportFormats = ["json", "dotenv"] as const;
+
+test("JSON exports only live current values of every kind in list order", async () => {
+  await createSecretScope("export-current", ["dev", "prod"]);
+  await Promise.all(
+    [
+      { key: "C", value: "three", kind: "env" },
+      { key: "B", value: "two", kind: "token" },
+      { key: "A", value: "one", kind: "secret" },
+      { key: "GONE", value: "removed", kind: "secret" },
+    ].map(
+      async ({ key, ...body }) =>
+        await expectSet(
+          await secretRequest("PUT", "export-current", "dev", key, body),
+          key,
+          1,
+          body.kind
+        )
+    )
+  );
+  await expectSet(
+    await secretRequest("PUT", "export-current", "dev", "A", { value: "uno" }),
+    "A",
+    2
+  );
+  const deletion = await secretRequest(
+    "DELETE",
+    "export-current",
+    "dev",
+    "GONE"
+  );
+  expect(deletion.status).toBe(204);
+  await expectSet(
+    await secretRequest("PUT", "export-current", "prod", "A", {
+      value: "other",
+    }),
+    "A",
+    1
+  );
+  const responses = await Promise.all(
+    ["", "?format=json"].map(
+      async (query) => await exportRequest("export-current", "dev", query)
+    )
+  );
+  const texts = await Promise.all(
+    responses.map(async (response) => await response.text())
+  );
+  for (const [index, response] of responses.entries()) {
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("application/json");
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(texts[index]).toBe('{"A":"uno","B":"two","C":"three"}');
+  }
+});
+
+test("dotenv export round-trips spaces, quotes, comments, escapes and line breaks", async () => {
+  await createSecretScope("export-dotenv");
+  const entries = [
+    "has space",
+    "it's",
+    'say "hi"',
+    "tick`s",
+    "a#b",
+    "k=v",
+    "$HOME",
+    "back\\slash",
+    "C:\\dir\\",
+    "two\nlines",
+    "a\r\nb",
+    "a\rb",
+    "",
+    "\uFEFFbom",
+  ].map((value, index) => ({ key: `KEY_${index}`, value }));
+  await Promise.all(
+    entries.map(
+      async ({ key, value }) =>
+        await expectSet(
+          await secretRequest("PUT", "export-dotenv", "dev", key, { value }),
+          key,
+          1
+        )
+    )
+  );
+  const response = await exportRequest(
+    "export-dotenv",
+    "dev",
+    "?format=dotenv"
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Content-Type")).toBe(
+    "text/plain; charset=utf-8"
+  );
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(parse(await response.text())).toEqual(
+    Object.fromEntries(entries.map(({ key, value }) => [key, value]))
+  );
+});
+
+test.each(exportFormats)("empty environment exports as %s", async (format) => {
+  const projectSlug = `export-empty-${format}`;
+  await createSecretScope(projectSlug);
+  const response = await exportRequest(projectSlug, "dev", `?format=${format}`);
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(await response.text()).toBe(format === "json" ? "{}" : "");
+});
+
+test.each(["a'b\"c`#", "\r\\n"])(
+  "unwritable dotenv values fail with the first key only and still export as JSON",
+  async (value) => {
+    const projectSlug = `export-unwritable-${value.startsWith("a") ? "quotes" : "cr"}`;
+    await createSecretScope(projectSlug);
+    await Promise.all(
+      ["C", "B"].map(
+        async (key) =>
+          await expectSet(
+            await secretRequest("PUT", projectSlug, "dev", key, { value }),
+            key,
+            1
+          )
+      )
+    );
+    const before = await secretState();
+    const logs = spyConsole();
+    try {
+      const response = await exportRequest(
+        projectSlug,
+        "dev",
+        "?format=dotenv"
+      );
+      expect(response.status).toBe(422);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({
+        defined: false,
+        code: "UNPROCESSABLE_CONTENT",
+        status: 422,
+        message: "Secret B cannot be exported as dotenv; use format=json",
+      });
+      expect(text).not.toContain(value);
+      expect(await secretState()).toEqual(before);
+      const json = await exportRequest(projectSlug);
+      expect(json.status).toBe(200);
+      expect(await json.json()).toEqual({ B: value, C: value });
+      for (const log of logs) {
+        expect(JSON.stringify(log.mock.calls)).not.toContain(value);
+      }
+    } finally {
+      for (const log of logs) {
+        log.mockRestore();
+      }
+    }
+  }
+);
+
+test.each([
+  { projectSlug: "secret-vault", env: "dev", query: "?format=xml" },
+  { projectSlug: "secret-vault", env: "dev", query: "?format=" },
+  { projectSlug: "secret-vault", env: "dev", query: "?format=JSON" },
+  { projectSlug: "Bad", env: "dev", query: "" },
+  { projectSlug: "secret-vault", env: "Bad", query: "" },
+])(
+  "export rejects invalid input $projectSlug/$env$query without an audit event",
+  async ({ projectSlug, env, query }) => {
+    const before = await secretState();
+    const response = await exportRequest(projectSlug, env, query);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await response.json()).toMatchObject({ code: "BAD_REQUEST" });
+    expect(await secretState()).toEqual(before);
+  }
+);
+
+test.each(exportFormats)(
+  "successful %s export records exactly one scoped audit event",
+  async (format) => {
+    const projectSlug = `export-audit-${format}`;
+    const { projectRow, environments } = await createSecretScope(projectSlug);
+    const value = "PRIVATE_EXPORT_AUDIT";
+    await expectSet(
+      await secretRequest("PUT", projectSlug, "dev", "KEY", { value }),
+      "KEY",
+      1
+    );
+    const before = await eventCount();
+    const response = await exportRequest(
+      projectSlug,
+      "dev",
+      `?format=${format}`
+    );
+    expect(response.status).toBe(200);
+    expect(await eventCount()).toBe(before + 1);
+    const events = await db
+      .select()
+      .from(auditEvent)
+      .where(
+        and(
+          eq(auditEvent.projectId, projectRow.id),
+          eq(auditEvent.action, "secret.export")
+        )
+      );
+    expect(events).toHaveLength(1);
+    expect(firstRow(events)).toMatchObject({
+      action: "secret.export",
+      actorType: "user",
+      actorId: userA.id,
+      projectId: projectRow.id,
+      environmentId: firstRow(environments).id,
+      secretId: null,
+      ip: "192.0.2.1",
+      userAgent: "Vault API test",
+    });
+    expect(JSON.stringify(events)).not.toContain(value);
+  }
+);
+
+test.each(["ciphertext", "iv", "wrapped_dek"] as const)(
+  "export checks all integrity before formatting and suppresses values on corrupt %s",
+  async (column) => {
+    const projectSlug = `export-tamper-${column.replaceAll("_", "-")}`;
+    const { projectRow, environments } = await createSecretScope(projectSlug);
+    const entries = [
+      { key: "A", value: "a'b\"c`#" },
+      { key: "B", value: "PRIVATE_EXPORT_TAMPER_B" },
+      { key: "C", value: "PRIVATE_EXPORT_TAMPER_C" },
+    ];
+    const values = entries.map(({ value }) => value);
+    await Promise.all(
+      entries.map(
+        async ({ key, value }) =>
+          await expectSet(
+            await secretRequest("PUT", projectSlug, "dev", key, { value }),
+            key,
+            1
+          )
+      )
+    );
+    if (column === "wrapped_dek") {
+      await db.execute(
+        sql`UPDATE project_key SET wrapped_dek = set_byte(wrapped_dek, 0, get_byte(wrapped_dek, 0) # 1) WHERE project_id = ${projectRow.id}`
+      );
+    } else {
+      const row = firstRow(await secretRows(firstRow(environments).id, "B"));
+      const field = secretVersion[column];
+      await db.execute(
+        sql`UPDATE secret_version SET ${sql.identifier(column)} = set_byte(${field}, 0, get_byte(${field}, 0) # 1) WHERE id = ${row.currentVersionId}`
+      );
+    }
+    const before = await secretState();
+    const logs = spyConsole();
+    try {
+      const responses = await Promise.all(
+        exportFormats.map(
+          async (format) =>
+            await exportRequest(projectSlug, "dev", `?format=${format}`)
+        )
+      );
+      const texts = await Promise.all(
+        responses.map(async (response) => await response.text())
+      );
+      for (const [index, response] of responses.entries()) {
+        expect(response.status).toBe(500);
+        expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+        const text = texts[index] ?? "";
+        expect(JSON.parse(text)).toEqual(integrityError);
+        for (const value of values) {
+          expect(text).not.toContain(value);
+        }
+      }
+      expect(await secretState()).toEqual(before);
+      for (const log of logs) {
+        for (const value of values) {
+          expect(JSON.stringify(log.mock.calls)).not.toContain(value);
+        }
+      }
+    } finally {
+      for (const log of logs) {
+        log.mockRestore();
+      }
+    }
+  }
+);
+
+test("rejected export audit inserts suppress both formats without values or writes", async () => {
+  await createSecretScope("export-rejected-audit");
+  const value = "PRIVATE_EXPORT_REJECTED_AUDIT";
+  await expectSet(
+    await secretRequest("PUT", "export-rejected-audit", "dev", "KEY", {
+      value,
+    }),
+    "KEY",
+    1
+  );
+  const before = await secretState();
+  await db.execute(
+    sql`ALTER TABLE audit_event ADD CONSTRAINT reject_all CHECK (false) NOT VALID`
+  );
+  const logs = spyConsole();
+  try {
+    const responses = await Promise.all(
+      exportFormats.map(
+        async (format) =>
+          await exportRequest(
+            "export-rejected-audit",
+            "dev",
+            `?format=${format}`
+          )
+      )
+    );
+    const texts = await Promise.all(
+      responses.map(async (response) => await response.text())
+    );
+    for (const [index, response] of responses.entries()) {
+      expect(response.status).toBe(500);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      const text = texts[index] ?? "";
+      expect(JSON.parse(text)).toEqual(genericError);
+      expect(text).not.toContain(value);
+    }
+    expect(await secretState()).toEqual(before);
+    for (const log of logs) {
+      expect(JSON.stringify(log.mock.calls)).not.toContain(value);
+    }
+  } finally {
+    for (const log of logs) {
+      log.mockRestore();
+    }
+    await db.execute(sql`ALTER TABLE audit_event DROP CONSTRAINT reject_all`);
+  }
+});
+
+test.each(exportFormats)(
+  "%s export hides unowned projects and missing environments without audit",
+  async (format) => {
+    const before = await secretState();
+    const query = `?format=${format}`;
+    const unowned = await exportRequest(
+      "secret-vault",
+      "dev",
+      query,
+      userB.cookie
+    );
+    const absent = await exportRequest(
+      "nobody-owns-this",
+      "dev",
+      query,
+      userB.cookie
+    );
+    const missingEnv = await exportRequest("secret-vault", "missing", query);
+    const expected = {
+      defined: false,
+      code: "NOT_FOUND",
+      status: 404,
+      message: "Not Found",
+    };
+    expect(unowned.status).toBe(404);
+    expect(absent.status).toBe(404);
+    const text = await unowned.text();
+    expect(text).toBe(await absent.text());
+    expect(JSON.parse(text)).toEqual(expected);
+    expect(missingEnv.status).toBe(404);
+    expect(await missingEnv.json()).toEqual(expected);
+    for (const response of [unowned, absent, missingEnv]) {
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    }
+    expect(await secretState()).toEqual(before);
+  }
+);
+
+test.each(
+  ["", unknownCookie].flatMap((cookie) =>
+    [
+      { projectSlug: "secret-vault", env: "dev", query: "" },
+      { projectSlug: "Bad", env: "dev", query: "?format=json" },
+      { projectSlug: "secret-vault", env: "Bad", query: "?format=dotenv" },
+      { projectSlug: "secret-vault", env: "dev", query: "?format=xml" },
+    ].map((scope) => ({ cookie, ...scope }))
+  )
+)(
+  "anonymous export $projectSlug/$env$query rejects before validation or lookup",
+  async ({ cookie, projectSlug, env, query }) => {
+    const before = await secretState();
+    const baseline = await handler(
+      new Request(`${baseURL}/api/v1/private-data`)
+    );
+    const response = await exportRequest(projectSlug, env, query, cookie);
+    expect(response.status).toBe(401);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await response.text()).toBe(await baseline.text());
+    expect(await secretState()).toEqual(before);
+  }
+);

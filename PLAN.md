@@ -73,7 +73,7 @@ Every procedure declares `.route({ method, path })` so it appears in the OpenAPI
 | Set (create or overwrite) | `PUT /api/v1/projects/{project}/envs/{env}/secrets/{key}` | Body `{ value, kind?, description? }`. Writes a new version |
 | Update (safe) | `PATCH …/secrets/{key}` | Body `{ value, expectedVersion }`. Returns 409 if someone changed it first |
 | Remove | `DELETE …/secrets/{key}` | Soft delete. Later versions can restore it |
-| Bulk export | `GET …/envs/{env}/export?format=dotenv\|json` | What the CLI and Varlock plugin use to inject a whole environment in one call. Returns plaintext, so it requires the `inject` permission. Audited as `secret.export` |
+| Bulk export | `GET …/envs/{env}/export?format=dotenv\|json` | What the CLI and Varlock plugin use to inject a whole environment in one call. Returns plaintext, so it requires the `inject` permission. Audited as `secret.export`. Dotenv output is promised to round-trip only through the `dotenv` npm package (17.4.2); a value it cannot carry returns 422 naming the key, and JSON always works. |
 | History / rollback | `GET …/secrets/{key}/versions`, `POST …/secrets/{key}/rollback` | Rollback takes `{ version }` |
 | Projects / envs | CRUD under `/api/v1/projects` | Human sessions by default (see §3) |
 

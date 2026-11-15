@@ -14,6 +14,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import * as z from "zod";
 
 import type { Context } from "../context";
+import { DotenvValueError, formatDotenv } from "../dotenv";
 import { authedProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
@@ -113,6 +114,86 @@ const appendVersion = async (
 };
 
 export const secretsRouter = {
+  export: authedProcedure
+    .route({
+      method: "GET",
+      path: "/projects/{project}/envs/{env}/export",
+    })
+    .input(
+      z.object({
+        project: slug,
+        env: slug,
+        format: z.enum(["json", "dotenv"]).default("json"),
+      })
+    )
+    .output(
+      z.union([
+        z.record(z.string(), z.string()),
+        z.file().mime("text/plain; charset=utf-8"),
+      ])
+    )
+    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(
+      audit("secret.export", ({ context }) => {
+        if (!(context.project && context.environment)) {
+          throw new ORPCError("NOT_FOUND");
+        }
+        return {
+          projectId: context.project.id,
+          environmentId: context.environment.id,
+        };
+      })
+    )
+    .handler(async ({ context, input }) => {
+      if (!context.environment) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const rows = await context.db
+        .select({
+          key: secret.key,
+          ciphertext: secretVersion.ciphertext,
+          iv: secretVersion.iv,
+        })
+        .from(secret)
+        .innerJoin(secretVersion, eq(secret.currentVersionId, secretVersion.id))
+        .where(
+          and(
+            eq(secret.environmentId, context.environment.id),
+            isNull(secret.deletedAt)
+          )
+        )
+        .orderBy(asc(secret.key));
+      const dek = await projectDek(context, context.project.id);
+      const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+      let entries;
+      try {
+        entries = await Promise.all(
+          rows.map(async (row) => ({
+            key: row.key,
+            value: decoder.decode(await decryptValue(row, dek)),
+          }))
+        );
+      } catch (error) {
+        return rethrowIntegrityError(error);
+      }
+      if (input.format === "json") {
+        return Object.fromEntries(
+          entries.map(({ key, value: plaintext }) => [key, plaintext])
+        );
+      }
+      try {
+        return new File([formatDotenv(entries)], "export", {
+          type: "text/plain; charset=utf-8",
+        });
+      } catch (error) {
+        if (error instanceof DotenvValueError) {
+          throw new ORPCError("UNPROCESSABLE_CONTENT", {
+            message: error.message,
+          });
+        }
+        throw error;
+      }
+    }),
   list: authedProcedure
     .route({
       method: "GET",
