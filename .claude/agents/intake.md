@@ -27,7 +27,7 @@ that, scoped so it can land as one small pull request.
 ## Decide
 
 <!-- factory:project -->
-TODO: one or two sentences on what this project is for and what kinds of requests belong in it (see factory/ADAPT.md).
+jomans-vault is a self-hosted online secret store, inspired by HashiCorp Vault, for agents and humans: encrypted, versioned secrets per project and environment, a REST API under `/api/v1`, scoped API keys, an audit log, a web UI, the `jv` CLI and a Varlock plugin, so local development fetches secrets at run time instead of keeping them on disk (`PLAN.md` is the roadmap). Requests belong here when they serve storing, delivering, scoping or auditing secrets; reject ones that weaken the guarantees (plaintext at rest, values in logs or audit events, plaintext reads without the `reveal`/`inject` permission) or that are unrelated to a secret store.
 <!-- /factory:project -->
 
 - **ACCEPT** when the request is clear, fits the project, and can be built and

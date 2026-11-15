@@ -45,7 +45,14 @@ never kill by process name.
 - The flow does what the spec promises, with no dead ends.
 - Loading, empty and error states exist and say something useful.
 - Each kind of user the change affects (signed out, signed in, different roles)
-  gets a sensible path, following the patterns the app already uses.
+  gets a sensible path, following the patterns the app already uses. This
+  app's users: a signed-out visitor (sees sign-in and sign-up only); the
+  signed-in vault owner managing projects, environments, secrets and API keys
+  in the web UI; a developer approving a `jv login` request in the browser; and
+  agents and scripts using the REST API or `jv` CLI, for whom error messages
+  and status codes are the UX. Secret values stay masked until a deliberate
+  reveal, and destructive actions (delete, revoke, rollback) need a
+  confirmation.
 - The copy is short, plain and consistent with the rest of the app.
 - Accessibility: real buttons and links, labels, focus order, keyboard use, and
   alt text.
