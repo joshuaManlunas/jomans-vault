@@ -9,6 +9,7 @@ export type AuditAction =
   | "environment.create"
   | "environment.delete"
   | "secret.write"
+  | "secret.delete"
   | "secret.reveal";
 export interface AuditTarget {
   projectId: string;
