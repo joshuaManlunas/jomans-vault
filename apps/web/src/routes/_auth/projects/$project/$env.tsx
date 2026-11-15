@@ -1,7 +1,9 @@
 import { Badge } from "@jomans-vault/ui/components/badge";
 import { Button } from "@jomans-vault/ui/components/button";
+import { DialogTrigger } from "@jomans-vault/ui/components/dialog";
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
@@ -17,9 +19,10 @@ import {
 } from "@jomans-vault/ui/components/table";
 import { createFileRoute } from "@tanstack/react-router";
 
+import { NewSecretDialog } from "@/components/new-secret-dialog";
+import { SecretValue } from "@/components/secret-value";
 import { useProjectPage } from "@/lib/project-page";
 
-const MASK = "••••••••";
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
   timeStyle: "short",
@@ -27,6 +30,7 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
 
 const EnvironmentSecrets = () => {
   const { secrets } = useProjectPage();
+  const { project, env } = Route.useParams();
   if (secrets.isPending) {
     return (
       <output aria-label="Loading secrets" className="flex flex-col gap-4">
@@ -46,48 +50,67 @@ const EnvironmentSecrets = () => {
       </div>
     );
   }
-  if (secrets.data.length === 0) {
-    return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>No secrets yet</EmptyTitle>
-          <EmptyDescription>This environment has no secrets.</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    );
-  }
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Key</TableHead>
-          <TableHead>Kind</TableHead>
-          <TableHead>Version</TableHead>
-          <TableHead>Last update</TableHead>
-          <TableHead>Value</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {secrets.data.map((secret) => (
-          <TableRow key={secret.key}>
-            <TableCell className="font-mono">{secret.key}</TableCell>
-            <TableCell>
-              <Badge variant="secondary">{secret.kind}</Badge>
-            </TableCell>
-            <TableCell>{secret.version}</TableCell>
-            <TableCell>
-              <time dateTime={secret.updatedAt}>
-                {dateFormatter.format(new Date(secret.updatedAt))}
-              </time>
-            </TableCell>
-            <TableCell>
-              <span aria-hidden="true">{MASK}</span>
-              <span className="sr-only">Hidden value</span>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <NewSecretDialog
+      key={`${project}/${env}`}
+      project={project}
+      env={env}
+      existingKeys={secrets.data.map((secret) => secret.key)}
+    >
+      {secrets.data.length === 0 ? (
+        <Empty>
+          <EmptyHeader>
+            <EmptyTitle>No secrets yet</EmptyTitle>
+            <EmptyDescription>
+              This environment has no secrets.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <DialogTrigger render={<Button />}>Add secret</DialogTrigger>
+          </EmptyContent>
+        </Empty>
+      ) : (
+        <Table className="min-w-160 table-fixed">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-1/4">Key</TableHead>
+              <TableHead className="w-20">Kind</TableHead>
+              <TableHead className="w-16">Version</TableHead>
+              <TableHead className="w-36">Last update</TableHead>
+              <TableHead>Value</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {secrets.data.map((secret) => (
+              <TableRow key={secret.key}>
+                <TableCell className="font-mono wrap-anywhere whitespace-normal">
+                  {secret.key}
+                </TableCell>
+                <TableCell>
+                  <Badge variant="secondary">{secret.kind}</Badge>
+                </TableCell>
+                <TableCell>{secret.version}</TableCell>
+                <TableCell className="whitespace-normal">
+                  <time dateTime={secret.updatedAt}>
+                    {dateFormatter.format(new Date(secret.updatedAt))}
+                  </time>
+                </TableCell>
+                <TableCell className="whitespace-normal">
+                  <SecretValue
+                    key={`${project}/${env}/${secret.key}`}
+                    project={project}
+                    env={env}
+                    secretKey={secret.key}
+                    version={secret.version}
+                    updatedAt={secret.updatedAt}
+                  />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </NewSecretDialog>
   );
 };
 
