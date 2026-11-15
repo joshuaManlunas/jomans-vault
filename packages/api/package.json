@@ -24,6 +24,7 @@
     "@jomans-vault/config": "workspace:*",
     "@types/bun": "^1.4.4",
     "@types/pg": "^8.23.1",
+    "dotenv": "17.4.2",
     "drizzle-orm": "catalog:",
     "pg": "^8.23.0",
     "typescript": "catalog:"

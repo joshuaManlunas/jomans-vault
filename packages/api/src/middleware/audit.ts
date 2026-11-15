@@ -11,6 +11,7 @@ export type AuditAction =
   | "secret.rollback"
   | "secret.write"
   | "secret.delete"
+  | "secret.export"
   | "secret.reveal";
 export interface AuditTarget {
   projectId: string;
@@ -18,7 +19,11 @@ export interface AuditTarget {
   secretId?: string;
 }
 
-type AuthedContext = Context & { principal: Principal };
+type AuthedContext = Context & {
+  principal: Principal;
+  project?: { id: string };
+  environment?: { id: string } | null;
+};
 
 export const audit = <TOutput>(
   action: AuditAction,
