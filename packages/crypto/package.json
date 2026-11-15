@@ -1,0 +1,17 @@
+{
+  "name": "@jomans-vault/crypto",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "check-types": "tsc -b",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@jomans-vault/config": "workspace:*",
+    "@types/bun": "^1.4.4",
+    "typescript": "catalog:"
+  }
+}

@@ -131,7 +131,7 @@ Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run
 
 **Dev server.** `bun run dev:web -- --port <port>` starts the web app (default port 3001). The docs site: `cd apps/fumadocs && bun run dev -- --port <port>` (default 4000).
 
-**Validation** (what `factory/checks.sh` runs, from the repo root): `bun run check` (lint + format), `bun run check-types`, `bun run build`, and `bun run test` once the repo has tests (needs Postgres up).
+**Validation** (what `factory/checks.sh` runs, from the repo root): `bun run check` (lint + format), `bun run check-types`, and `bun run build`. `bun run test` runs `bun test` in every package with a `test` script. The crypto tests need no database; database-backed tests from later children need Postgres up.
 
 <!-- factory:section -->
 
