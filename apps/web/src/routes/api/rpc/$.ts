@@ -1,28 +1,20 @@
 import { appRouter } from "@jomans-vault/api/routers/index";
-import { onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { createFileRoute } from "@tanstack/react-router";
 
 import { createContext } from "../../../context";
 
-const rpcHandler = new RPCHandler(appRouter, {
-  interceptors: [
-    onError((cause) => {
-      console.error(cause);
-    }),
-  ],
-});
+const rpcHandler = new RPCHandler(appRouter);
 
 const handle = async ({ request }: { request: Request }) => {
   const rpcResult = await rpcHandler.handle(request, {
     prefix: "/api/rpc",
     context: await createContext({ req: request }),
   });
-  if (rpcResult.response) {
-    return rpcResult.response;
-  }
-
-  return new Response("Not found", { status: 404 });
+  const response =
+    rpcResult.response ?? new Response("Not found", { status: 404 });
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
 };
 
 export const Route = createFileRoute("/api/rpc/$")({

@@ -1,8 +1,10 @@
 import type { RouterClient } from "@orpc/server";
 
 import { authedProcedure, publicProcedure } from "../index";
+import { projectsRouter } from "./projects";
 
 export const appRouter = {
+  projects: projectsRouter,
   healthCheck: publicProcedure
     .route({ method: "GET", path: "/health" })
     .handler(() => "OK"),

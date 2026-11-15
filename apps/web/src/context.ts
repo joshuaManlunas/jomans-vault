@@ -1,8 +1,14 @@
 import { createContext as createApiContext } from "@jomans-vault/api/context";
+import { parseMasterKey } from "@jomans-vault/crypto";
 
+import { ENV } from "./env.server";
 import { db, auth } from "./services";
 
-export const createContext = async ({ req }: { req: Request }) =>
-  await createApiContext({ db, auth, headers: req.headers });
+let masterKey: Uint8Array | undefined;
+
+export const createContext = async ({ req }: { req: Request }) => {
+  masterKey ??= parseMasterKey(ENV.VAULT_MASTER_KEY);
+  return await createApiContext({ db, auth, headers: req.headers, masterKey });
+};
 
 export type Context = Awaited<ReturnType<typeof createContext>>;
