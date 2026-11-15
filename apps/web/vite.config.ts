@@ -19,11 +19,8 @@ export default defineConfig({
   plugins: [
     varlockVitePlugin({
       ssrInjectMode: "init-only",
-      // Bundled static imports would run Varlock before key validation.
       ssrEntryCode: [
         `import ${JSON.stringify(fileURLToPath(new URL("src/validate-master-key.server.ts", import.meta.url)))};`,
-        "const varlockAutoLoad = 'varlock/auto-load';",
-        "await import(/* @vite-ignore */ varlockAutoLoad);",
       ],
     }),
     tailwindcss(),

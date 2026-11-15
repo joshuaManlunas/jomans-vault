@@ -1,13 +1,10 @@
-import { existsSync } from "node:fs";
-import { loadEnvFile } from "node:process";
-
+import "varlock/auto-load";
 import { MasterKeyError, parseMasterKey } from "@jomans-vault/crypto";
 
-if (existsSync(".env")) {
-  loadEnvFile();
-}
+import { ENV } from "./env.server";
+
 try {
-  parseMasterKey(process.env.VAULT_MASTER_KEY);
+  parseMasterKey(ENV.VAULT_MASTER_KEY);
 } catch (error) {
   if (!(error instanceof MasterKeyError)) {
     throw error;
