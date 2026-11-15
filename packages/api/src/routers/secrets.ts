@@ -101,7 +101,7 @@ export const secretsRouter = {
           target: [secret.environmentId, secret.key],
           targetWhere: isNull(secret.deletedAt),
           set: {
-            updatedAt: sql`now()`,
+            updatedAt: sql`clock_timestamp()`,
             ...(input.kind === undefined ? {} : { kind: input.kind }),
             ...(input.description === undefined
               ? {}

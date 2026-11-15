@@ -1463,6 +1463,91 @@ test("concurrent sets serialize both new and existing secret versions and audit 
   /* oxlint-enable no-await-in-loop */
 });
 
+test.each([false, true])(
+  "secret update times follow version order when an older transaction locks last (existing: %s)",
+  async (existing) => {
+    const projectSlug = `secret-time-${existing}`;
+    const { environments } = await createSecretScope(projectSlug);
+    const dev = firstRow(environments);
+    if (existing) {
+      await expectSet(
+        await secretRequest("PUT", projectSlug, "dev", "TIMED", {
+          value: "seed",
+        }),
+        "TIMED",
+        1
+      );
+    }
+    const lock = await db.$client.connect();
+    let delayed: Promise<Response> | undefined;
+    try {
+      await db.execute(sql`
+        CREATE FUNCTION delay_secret_set() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.key = 'TIMED' AND NEW.description = 'delayed' THEN
+            PERFORM pg_advisory_xact_lock(22008);
+          END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER delay_secret_set BEFORE INSERT ON secret
+          FOR EACH ROW EXECUTE FUNCTION delay_secret_set();
+      `);
+      await lock.query("SELECT pg_advisory_lock(22008)");
+      delayed = secretRequest("PUT", projectSlug, "dev", "TIMED", {
+        value: "older transaction",
+        description: "delayed",
+      });
+      let waiting = false;
+      /* oxlint-disable no-await-in-loop -- Wait for the older HTTP transaction to reach the trigger before starting the newer one. */
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const result = await db.$client.query(`
+          SELECT 1 FROM pg_locks WHERE locktype = 'advisory'
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+            AND classid = 0 AND objid = 22008 AND NOT granted
+        `);
+        waiting = result.rows.length > 0;
+        if (waiting) {
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      /* oxlint-enable no-await-in-loop */
+      expect(waiting).toBe(true);
+      const newer = await expectSet(
+        await secretRequest("PUT", projectSlug, "dev", "TIMED", {
+          value: "newer transaction",
+        }),
+        "TIMED",
+        existing ? 2 : 1
+      );
+      await lock.query("SELECT pg_advisory_unlock(22008)");
+      const older = await expectSet(await delayed, "TIMED", newer.version + 1);
+      expect(Date.parse(older.updatedAt)).toBeGreaterThanOrEqual(
+        Date.parse(newer.updatedAt)
+      );
+      const row = firstRow(await secretRows(dev.id, "TIMED"));
+      expect(row.updatedAt.toISOString()).toBe(older.updatedAt);
+      const versions = await versionRows(row.id);
+      expect(row.currentVersionId).toBe(firstRow(versions.slice(-1)).id);
+      const response = await secretRequest("GET", projectSlug, "dev", "TIMED");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        key: "TIMED",
+        value: "older transaction",
+        version: older.version,
+      });
+    } finally {
+      await lock.query("SELECT pg_advisory_unlock_all()");
+      await delayed;
+      await db.execute(sql`
+        DROP TRIGGER IF EXISTS delay_secret_set ON secret;
+        DROP FUNCTION IF EXISTS delay_secret_set();
+      `);
+      lock.release();
+    }
+  }
+);
+
 test("plaintext never reaches stored text or bytea columns and repeated values use fresh IVs", async () => {
   const { projectRow, environments } =
     await createSecretScope("secret-at-rest");
