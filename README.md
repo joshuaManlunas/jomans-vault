@@ -101,7 +101,9 @@ Run standalone Node/Bun tools that use Varlock from the owning app directory so 
 - Logs: bun run docker:logs
 - Stop: bun run docker:down
 
-Environment variables are read from each app's `.env` file (baked into web builds for public variables) and overridden in `docker-compose.yml` for container networking.
+The build and start scripts load `apps/web/.env` with Compose's `--env-file` option. This preserves a `VAULT_MASTER_KEY` stored only in that file when Compose resolves the service's valueless environment entry; an exported shell value takes precedence. When invoking Compose directly to build or start the web service, also pass `--env-file apps/web/.env`. Without that option or an exported key, the bare entry overrides the service's `env_file` value and the server refuses to start.
+
+Public variables are baked into web builds. Container networking values are overridden in `docker-compose.yml`.
 
 For more details, see the guide on [Deploying with Docker Compose](https://www.better-t-stack.dev/docs/guides/docker).
 
