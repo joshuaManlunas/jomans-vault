@@ -102,6 +102,10 @@ export const NewProjectDialog = ({ children }: { children: ReactNode }) => {
     <Dialog
       open={open}
       onOpenChange={(nextOpen, details) => {
+        if (!nextOpen && form.state.isSubmitting) {
+          details.cancel();
+          return;
+        }
         if (nextOpen) {
           opener.current =
             details.trigger instanceof HTMLElement ? details.trigger : null;
@@ -138,8 +142,8 @@ export const NewProjectDialog = ({ children }: { children: ReactNode }) => {
           onSubmit={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            setSubmitError(null);
-            if (!mutation.isPending) {
+            if (!form.state.isSubmitting) {
+              setSubmitError(null);
               form.handleSubmit();
             }
           }}
@@ -209,14 +213,26 @@ export const NewProjectDialog = ({ children }: { children: ReactNode }) => {
               Couldn&apos;t create the project. Try again.
             </p>
           )}
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>
-              Cancel
-            </DialogClose>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Creating..." : "Create project"}
-            </Button>
-          </DialogFooter>
+          <form.Subscribe selector={(state) => state.isSubmitting}>
+            {(isSubmitting) => (
+              <DialogFooter>
+                <DialogClose
+                  render={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isSubmitting}
+                    />
+                  }
+                >
+                  Cancel
+                </DialogClose>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? "Creating..." : "Create project"}
+                </Button>
+              </DialogFooter>
+            )}
+          </form.Subscribe>
         </form>
       </DialogContent>
     </Dialog>
