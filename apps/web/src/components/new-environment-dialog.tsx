@@ -26,9 +26,11 @@ const environmentSchema = z.object({ slug: slugField("Enter a name.") });
 
 export const NewEnvironmentDialog = ({
   project,
+  projectName,
   children,
 }: {
   project: string;
+  projectName: string;
   children: ReactNode;
 }) => {
   const navigate = useNavigate();
@@ -98,6 +100,9 @@ export const NewEnvironmentDialog = ({
       }}
     >
       <div className="flex items-center justify-between gap-4">
+        <h1 className="min-w-0 text-2xl font-semibold wrap-anywhere">
+          {projectName}
+        </h1>
         <DialogTrigger render={<Button ref={headerButton} />}>
           Add environment
         </DialogTrigger>

@@ -126,10 +126,11 @@ const ProjectLayout = ({ project, env }: { project: string; env?: string }) => {
       <Link to="/projects" className="w-fit underline">
         Back to projects
       </Link>
-      <h1 className="text-2xl font-semibold wrap-anywhere">
-        {currentProject.name}
-      </h1>
-      <NewEnvironmentDialog key={userId} project={project}>
+      <NewEnvironmentDialog
+        key={userId}
+        project={project}
+        projectName={currentProject.name}
+      >
         {environments.data.length > 0 && (
           <div className="flex flex-col items-start gap-2">
             <Label htmlFor="environment">Environment</Label>
@@ -144,7 +145,7 @@ const ProjectLayout = ({ project, env }: { project: string; env?: string }) => {
                 }
               }}
             >
-              <SelectTrigger id="environment">
+              <SelectTrigger id="environment" className="max-w-full">
                 <SelectValue placeholder="Choose an environment" />
               </SelectTrigger>
               <SelectContent>
@@ -171,7 +172,7 @@ const ProjectPage = () => {
     slug.safeParse(project).success &&
     (env === undefined || slug.safeParse(env).success);
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-6">
+    <main className="mx-auto flex w-full max-w-3xl min-w-0 flex-col gap-6 p-6">
       {valid && project ? (
         <ProjectLayout key={project} project={project} env={env} />
       ) : (
