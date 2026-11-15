@@ -129,6 +129,8 @@ Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run
 
 **Fresh checkout.** `bun install --frozen-lockfile`. Env is validated by Varlock against `apps/web/.env.schema`; values live in the gitignored `apps/web/.env` (`NODE_ENV`, `BETTER_AUTH_SECRET` (32+ chars), `BETTER_AUTH_URL`, `DATABASE_URL`, `VAULT_MASTER_KEY` (base64 for 32 bytes; not required by Varlock when `NODE_ENV=test`, but the server refuses to start without a valid one)). A worktree has no `.env`: copy it from the main checkout, or export the non-secret local defaults that `factory/checks.sh` uses. Postgres: `bun run db:start` (docker-compose, `postgres:password@localhost:5432/jomans-vault`); schema changes go through `bun run db:generate` then `bun run db:migrate`.
 
+After pulling a change that adds a migration, update the local database with `bun run db:migrate`.
+
 **Dev server.** `bun run dev:web -- --port <port>` starts the web app (default port 3001). The docs site: `cd apps/fumadocs && bun run dev -- --port <port>` (default 4000).
 
 **Validation** (what `factory/checks.sh` runs, from the repo root): `bun run check` (lint + format), `bun run check-types`, `bun run build`, and `bun run test`, which runs `bun test` in every package with a `test` script. The crypto tests need no database; the api package tests need Postgres up and create and drop their own database.

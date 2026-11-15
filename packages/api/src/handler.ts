@@ -22,7 +22,7 @@ export const createVaultApiHandler = ({
   auth,
   masterKey,
 }: VaultApiHandlerOptions): VaultApiHandler => {
-  parseMasterKey(masterKey);
+  const parsedMasterKey = parseMasterKey(masterKey);
   const handler = new OpenAPIHandler(appRouter, {
     plugins: [
       new OpenAPIReferencePlugin({
@@ -35,7 +35,12 @@ export const createVaultApiHandler = ({
   return async (request) => {
     const { response } = await handler.handle(request, {
       prefix: "/api/v1",
-      context: await createContext({ db, auth, headers: request.headers }),
+      context: await createContext({
+        db,
+        auth,
+        headers: request.headers,
+        masterKey: parsedMasterKey,
+      }),
     });
     const result = response ?? new Response("Not found", { status: 404 });
     result.headers.set("Cache-Control", "private, no-store");
