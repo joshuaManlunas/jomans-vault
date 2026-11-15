@@ -9,11 +9,13 @@ import {
   DropdownMenuTrigger,
 } from "@jomans-vault/ui/components/dropdown-menu";
 import { Skeleton } from "@jomans-vault/ui/components/skeleton";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { authClient } from "@/lib/auth-client";
 
 const UserMenu = () => {
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { data: session, isPending } = authClient.useSession();
 
@@ -45,6 +47,7 @@ const UserMenu = () => {
               authClient.signOut({
                 fetchOptions: {
                   onSuccess: () => {
+                    queryClient.clear();
                     navigate({
                       to: "/",
                     });
