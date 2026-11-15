@@ -17,7 +17,7 @@ import type { Context } from "../context";
 import { authedProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
-import { secretKey, slug } from "./validation";
+import { isUniqueViolation, secretKey, slug } from "./validation";
 
 const encoder = new TextEncoder();
 const pathInput = z.object({ project: slug, env: slug, key: secretKey });
@@ -25,6 +25,13 @@ const value = z
   .string()
   .refine((input) => input.isWellFormed())
   .refine((input) => encoder.encode(input).byteLength <= 65_536);
+const versionNumber = z.number().int().min(1).max(2_147_483_647);
+const writeOutput = z.object({
+  key: z.string(),
+  kind: z.string(),
+  version: z.number(),
+  updatedAt: z.date().transform((date) => date.toISOString()),
+});
 const auditTarget = ({ output }: { output: unknown }) =>
   z
     .object({
@@ -58,6 +65,51 @@ const projectDek = async (context: Context, projectId: string) => {
   } catch (error) {
     return rethrowIntegrityError(error);
   }
+};
+
+// The caller holds the secret row lock until the audit transaction commits.
+const appendVersion = async (
+  context: Context,
+  secretId: string,
+  encrypted: { ciphertext: Uint8Array; iv: Uint8Array },
+  actorId: string
+) => {
+  const [next] = await context.db
+    .select({
+      version: sql<number>`coalesce(max(${secretVersion.version}), 0) + 1`,
+    })
+    .from(secretVersion)
+    .where(eq(secretVersion.secretId, secretId));
+  if (!next) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR");
+  }
+  const [created] = await context.db
+    .insert(secretVersion)
+    .values({
+      secretId,
+      version: next.version,
+      ciphertext: Buffer.from(encrypted.ciphertext),
+      iv: Buffer.from(encrypted.iv),
+      createdByType: "user",
+      createdById: actorId,
+    })
+    .returning({ id: secretVersion.id });
+  if (!created) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR");
+  }
+  const [updated] = await context.db
+    .update(secret)
+    .set({
+      currentVersionId: created.id,
+      updatedAt: sql`clock_timestamp()`,
+      deletedAt: null,
+    })
+    .where(eq(secret.id, secretId))
+    .returning();
+  if (!updated) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR");
+  }
+  return { ...updated, secretId, version: next.version };
 };
 
 export const secretsRouter = {
@@ -276,6 +328,114 @@ export const secretsRouter = {
         projectId: context.project.id,
         secretId: row.id,
       };
+    }),
+  patch: authedProcedure
+    .route({
+      method: "PATCH",
+      path: "/projects/{project}/envs/{env}/secrets/{key}",
+    })
+    .input(pathInput.extend({ value, expectedVersion: versionNumber }))
+    .output(writeOutput)
+    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(audit("secret.write", auditTarget))
+    .handler(async ({ context, input }) => {
+      if (!context.environment) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const [row] = await context.db
+        .select()
+        .from(secret)
+        .where(
+          and(
+            eq(secret.environmentId, context.environment.id),
+            eq(secret.key, input.key),
+            isNull(secret.deletedAt)
+          )
+        )
+        .for("update");
+      if (!row) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const [current] = await context.db
+        .select({ version: secretVersion.version })
+        .from(secret)
+        .innerJoin(secretVersion, eq(secret.currentVersionId, secretVersion.id))
+        .where(eq(secret.id, row.id));
+      if (current?.version !== input.expectedVersion) {
+        throw new ORPCError("CONFLICT");
+      }
+      const dek = await projectDek(context, context.project.id);
+      const encrypted = await encryptValue(encoder.encode(input.value), dek);
+      return {
+        ...(await appendVersion(
+          context,
+          row.id,
+          encrypted,
+          context.principal.user.id
+        )),
+        projectId: context.project.id,
+      };
+    }),
+  rollback: authedProcedure
+    .route({
+      method: "POST",
+      path: "/projects/{project}/envs/{env}/secrets/{key}/rollback",
+    })
+    .input(pathInput.extend({ version: versionNumber }))
+    .output(writeOutput)
+    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(audit("secret.rollback", auditTarget))
+    .handler(async ({ context, input }) => {
+      if (!context.environment) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const [row] = await context.db
+        .select()
+        .from(secret)
+        .where(
+          and(
+            eq(secret.environmentId, context.environment.id),
+            eq(secret.key, input.key)
+          )
+        )
+        .orderBy(
+          sql`${secret.deletedAt} DESC NULLS FIRST`,
+          desc(secret.createdAt),
+          desc(secret.id)
+        )
+        .limit(1)
+        .for("update");
+      if (!row) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      const [source] = await context.db
+        .select()
+        .from(secretVersion)
+        .where(
+          and(
+            eq(secretVersion.secretId, row.id),
+            eq(secretVersion.version, input.version)
+          )
+        );
+      if (!source) {
+        throw new ORPCError("NOT_FOUND");
+      }
+      try {
+        return {
+          ...(await appendVersion(
+            context,
+            row.id,
+            source,
+            context.principal.user.id
+          )),
+          projectId: context.project.id,
+        };
+      } catch (error) {
+        if (isUniqueViolation(error, "secret_environment_id_key_live_unique")) {
+          throw new ORPCError("CONFLICT");
+        }
+        throw error;
+      }
     }),
   get: authedProcedure
     .route({
