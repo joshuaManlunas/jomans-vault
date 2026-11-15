@@ -57,9 +57,11 @@ const ProjectsList = () => {
   return (
     <ul className="divide-y border">
       {projects.data.map((project) => (
-        <li key={project.slug} className="flex flex-col gap-1 p-4">
-          <span className="font-medium">{project.name}</span>
-          <span className="text-muted-foreground text-sm">{project.slug}</span>
+        <li key={project.slug} className="flex min-w-0 flex-col gap-1 p-4">
+          <span className="font-medium wrap-anywhere">{project.name}</span>
+          <span className="text-muted-foreground text-sm wrap-anywhere">
+            {project.slug}
+          </span>
         </li>
       ))}
     </ul>
@@ -75,8 +77,5 @@ const ProjectsPage = () => (
 );
 
 export const Route = createFileRoute("/_auth/projects/")({
-  beforeLoad: ({ context }) => {
-    context.queryClient.removeQueries({ queryKey: orpc.projects.list.key() });
-  },
   component: ProjectsPage,
 });
