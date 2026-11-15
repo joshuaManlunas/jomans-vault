@@ -11,7 +11,12 @@ import {
   unwrapDek,
 } from "@jomans-vault/crypto";
 import { createDb } from "@jomans-vault/db";
-import { auditEvent, project, projectKey } from "@jomans-vault/db/schema/vault";
+import {
+  auditEvent,
+  environment,
+  project,
+  projectKey,
+} from "@jomans-vault/db/schema/vault";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
@@ -161,6 +166,11 @@ test("the generated OpenAPI spec includes both REST operations", async () => {
         patch: expect.any(Object),
         delete: expect.any(Object),
       },
+      "/projects/{project}/envs": {
+        get: expect.any(Object),
+        post: expect.any(Object),
+      },
+      "/projects/{project}/envs/{env}": { delete: expect.any(Object) },
     },
   });
 });
@@ -651,3 +661,387 @@ test.each([
     expect(context).toMatchObject({ ip, userAgent });
   }
 );
+
+const environmentRequest = async (
+  method: string,
+  projectSlug: string,
+  path = "",
+  body?: unknown,
+  cookie = userA.cookie
+) => await projectRequest(method, `/${projectSlug}/envs${path}`, body, cookie);
+const createEnvironment = async (
+  projectSlug: string,
+  slug: string,
+  cookie = userA.cookie
+) => await environmentRequest("POST", projectSlug, "", { slug }, cookie);
+const createEnvironmentStatus = async (
+  ...args: Parameters<typeof createEnvironment>
+) => {
+  const response = await createEnvironment(...args);
+  return response.status;
+};
+const environmentRequestStatus = async (
+  ...args: Parameters<typeof environmentRequest>
+) => {
+  const response = await environmentRequest(...args);
+  return response.status;
+};
+const environmentRows = async (projectId: string) =>
+  await db
+    .select()
+    .from(environment)
+    .where(eq(environment.projectId, projectId));
+const publicEnvironment = z.strictObject({
+  slug: z.string(),
+  createdAt: z.iso.datetime(),
+});
+const expectPublicEnvironment = (value: unknown, slug: string) => {
+  const body = publicEnvironment.parse(value);
+  expect(Object.keys(body).toSorted()).toEqual(["createdAt", "slug"]);
+  expect(body.slug).toBe(slug);
+  expect(new Date(body.createdAt).toISOString()).toBe(body.createdAt);
+  return body;
+};
+const listEnvironments = async (projectSlug: string, cookie = userA.cookie) => {
+  const response = await environmentRequest(
+    "GET",
+    projectSlug,
+    "",
+    undefined,
+    cookie
+  );
+  expect(response.status).toBe(200);
+  return z.array(publicEnvironment).parse(await response.json());
+};
+
+test("environments support create, ordered list, permanent delete and slug reuse", async () => {
+  expect(await createStatus("env-lifecycle")).toBe(201);
+  const slugs = ["development", "staging", "production", "qa-1"];
+  await Promise.all(
+    slugs.map(async (slug) => {
+      const response = await createEnvironment("env-lifecycle", slug);
+      expect(response.status).toBe(201);
+      expectPublicEnvironment(await response.json(), slug);
+    })
+  );
+  const before = await eventCount();
+  const listed = await listEnvironments("env-lifecycle");
+  expect(listed.map((row) => row.slug)).toEqual(slugs.toSorted());
+  expect(await eventCount()).toBe(before);
+  const deleted = await environmentRequest("DELETE", "env-lifecycle", "/qa-1");
+  expect(deleted.status).toBe(204);
+  expect(await deleted.text()).toBe("");
+  const remaining = await listEnvironments("env-lifecycle");
+  expect(remaining.map((row) => row.slug)).toEqual([
+    "development",
+    "production",
+    "staging",
+  ]);
+  const projectRow = firstRow(await ownedRows("env-lifecycle"));
+  const remainingRows = await environmentRows(projectRow.id);
+  expect(remainingRows.map((row) => row.slug)).not.toContain("qa-1");
+  const afterDelete = await eventCount();
+  const missing = await environmentRequest("DELETE", "env-lifecycle", "/qa-1");
+  expect(missing.status).toBe(404);
+  expect(await missing.json()).toMatchObject({ code: "NOT_FOUND" });
+  expect(await eventCount()).toBe(afterDelete);
+  const recreated = await createEnvironment("env-lifecycle", "qa-1");
+  expect(recreated.status).toBe(201);
+  expectPublicEnvironment(await recreated.json(), "qa-1");
+});
+
+test("environment lists and lookups stay within their owned project", async () => {
+  expect(await createStatus("env-scope")).toBe(201);
+  expect(await createStatus("env-scope-other")).toBe(201);
+  expect(await createStatus("env-scope", userB.cookie)).toBe(201);
+  expect(await listEnvironments("env-scope")).toEqual([]);
+  await Promise.all(
+    [
+      { projectSlug: "env-scope", slug: "own", cookie: userA.cookie },
+      {
+        projectSlug: "env-scope-other",
+        slug: "other-project",
+        cookie: userA.cookie,
+      },
+      { projectSlug: "env-scope", slug: "other-owner", cookie: userB.cookie },
+    ].map(async ({ projectSlug, slug, cookie }) => {
+      expect(await createEnvironmentStatus(projectSlug, slug, cookie)).toBe(
+        201
+      );
+    })
+  );
+  const before = await eventCount();
+  const listed = await listEnvironments("env-scope");
+  expect(listed.map((row) => row.slug)).toEqual(["own"]);
+  const rowsBefore = await db.select().from(environment);
+  await Promise.all(
+    ["other-project", "other-owner", "absent"].map(async (slug) => {
+      const response = await environmentRequest(
+        "DELETE",
+        "env-scope",
+        `/${slug}`
+      );
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ code: "NOT_FOUND" });
+    })
+  );
+  expect(await db.select().from(environment)).toEqual(rowsBefore);
+  expect(await eventCount()).toBe(before);
+});
+
+test("environment duplicates conflict only within a project", async () => {
+  expect(await createStatus("env-duplicates")).toBe(201);
+  expect(await createStatus("env-duplicates-other")).toBe(201);
+  expect(await createStatus("env-duplicates", userB.cookie)).toBe(201);
+  expect(await createEnvironmentStatus("env-duplicates", "production")).toBe(
+    201
+  );
+  const before = await eventCount();
+  const duplicate = await createEnvironment("env-duplicates", "production");
+  expect(duplicate.status).toBe(409);
+  expect(await duplicate.json()).toMatchObject({ code: "CONFLICT" });
+  const row = firstRow(await ownedRows("env-duplicates"));
+  expect(await environmentRows(row.id)).toHaveLength(1);
+  expect(await eventCount()).toBe(before);
+  await Promise.all(
+    [
+      { projectSlug: "env-duplicates-other", cookie: userA.cookie },
+      { projectSlug: "env-duplicates", cookie: userB.cookie },
+    ].map(async ({ projectSlug, cookie }) => {
+      expect(
+        await createEnvironmentStatus(projectSlug, "production", cookie)
+      ).toBe(201);
+    })
+  );
+});
+
+test("concurrent duplicate creates persist one environment and audit event", async () => {
+  expect(await createStatus("env-concurrent")).toBe(201);
+  const before = await eventCount();
+  const responses = await Promise.all([
+    createEnvironment("env-concurrent", "production"),
+    createEnvironment("env-concurrent", "production"),
+  ]);
+  expect(responses.map((response) => response.status).toSorted()).toEqual([
+    201, 409,
+  ]);
+  const row = firstRow(await ownedRows("env-concurrent"));
+  expect(await environmentRows(row.id)).toHaveLength(1);
+  expect(await eventCount()).toBe(before + 1);
+});
+
+test("environment slugs accept the 64-character boundary", async () => {
+  const slug = "x".repeat(64);
+  const response = await createEnvironment("env-lifecycle", slug);
+  expect(response.status).toBe(201);
+  expectPublicEnvironment(await response.json(), slug);
+  expect(
+    await environmentRequestStatus("DELETE", "env-lifecycle", `/${slug}`)
+  ).toBe(204);
+});
+
+test.each(["", "Prod", "my_env", "my env", "prød", "x".repeat(65)])(
+  "invalid environment body slug %j writes no rows or audit",
+  async (slug) => {
+    const before = await eventCount();
+    const rowsBefore = await db.select().from(environment);
+    const response = await createEnvironment("env-lifecycle", slug);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "BAD_REQUEST" });
+    expect(await db.select().from(environment)).toEqual(rowsBefore);
+    expect(await eventCount()).toBe(before);
+  }
+);
+
+test.each([
+  { method: "DELETE", projectSlug: "env-lifecycle", path: "/Prod" },
+  { method: "POST", projectSlug: "Prod", path: "" },
+  { method: "GET", projectSlug: "Prod", path: "" },
+  { method: "DELETE", projectSlug: "Prod", path: "/production" },
+])(
+  "invalid path on $method $projectSlug/envs$path writes nothing",
+  async ({ method, projectSlug, path }) => {
+    const before = await eventCount();
+    const rowsBefore = await db.select().from(environment);
+    const response = await environmentRequest(
+      method,
+      projectSlug,
+      path,
+      method === "POST" ? { slug: "production" } : undefined
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "BAD_REQUEST" });
+    expect(await db.select().from(environment)).toEqual(rowsBefore);
+    expect(await eventCount()).toBe(before);
+  }
+);
+
+test.each(["POST", "GET", "DELETE"])(
+  "%s environments gives identical not-found responses for unowned and absent projects",
+  async (method) => {
+    const before = await eventCount();
+    const rowsBefore = await db.select().from(environment);
+    const path = method === "DELETE" ? "/production" : "";
+    const body = method === "POST" ? { slug: "production" } : undefined;
+    const notOwned = await environmentRequest(
+      method,
+      "env-lifecycle",
+      path,
+      body,
+      userB.cookie
+    );
+    const nonexistent = await environmentRequest(
+      method,
+      "nobody-owns-this",
+      path,
+      body,
+      userB.cookie
+    );
+    expect(notOwned.status).toBe(404);
+    expect(nonexistent.status).toBe(404);
+    expect(await notOwned.text()).toBe(await nonexistent.text());
+    expect(await db.select().from(environment)).toEqual(rowsBefore);
+    expect(await eventCount()).toBe(before);
+  }
+);
+
+test.each(
+  ["", unknownCookie].flatMap((cookie) =>
+    [
+      { method: "POST", projectSlug: "env-lifecycle", path: "" },
+      { method: "GET", projectSlug: "env-lifecycle", path: "" },
+      { method: "DELETE", projectSlug: "env-lifecycle", path: "/production" },
+      { method: "POST", projectSlug: "Prod", path: "" },
+      { method: "GET", projectSlug: "Prod", path: "" },
+      { method: "DELETE", projectSlug: "Prod", path: "/Prod" },
+      { method: "DELETE", projectSlug: "env-lifecycle", path: "/Prod" },
+    ].map((route) => ({ cookie, ...route }))
+  )
+)(
+  "unauthenticated $method $projectSlug/envs$path rejects before validation and lookup",
+  async ({ cookie, method, projectSlug, path }) => {
+    const before = await eventCount();
+    const rowsBefore = await db.select().from(environment);
+    const baseline = await handler(
+      new Request(`${baseURL}/api/v1/private-data`)
+    );
+    const response = await environmentRequest(
+      method,
+      projectSlug,
+      path,
+      method === "POST" ? { slug: "Prod" } : undefined,
+      cookie
+    );
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe(await baseline.text());
+    expect(await db.select().from(environment)).toEqual(rowsBefore);
+    expect(await eventCount()).toBe(before);
+  }
+);
+
+test("environment create and delete each record their internal audit target", async () => {
+  expect(await createStatus("env-audit")).toBe(201);
+  const projectRow = firstRow(await ownedRows("env-audit"));
+  const before = await eventCount();
+  expect(await createEnvironmentStatus("env-audit", "production")).toBe(201);
+  const row = firstRow(await environmentRows(projectRow.id));
+  expect(await eventCount()).toBe(before + 1);
+  const events = await db
+    .select()
+    .from(auditEvent)
+    .where(eq(auditEvent.environmentId, row.id));
+  expect(events).toHaveLength(1);
+  expect(firstRow(events).action).toBe("environment.create");
+  expect(
+    await environmentRequestStatus("DELETE", "env-audit", "/production")
+  ).toBe(204);
+  expect(await eventCount()).toBe(before + 2);
+  expect(await environmentRows(projectRow.id)).toEqual([]);
+  const history = await db
+    .select()
+    .from(auditEvent)
+    .where(eq(auditEvent.environmentId, row.id));
+  expect(history).toHaveLength(2);
+  expect(history.map((event) => event.action).toSorted()).toEqual([
+    "environment.create",
+    "environment.delete",
+  ]);
+  for (const event of history) {
+    expect(event).toMatchObject({
+      actorType: "user",
+      actorId: userA.id,
+      projectId: projectRow.id,
+      environmentId: row.id,
+      secretId: null,
+      ip: "192.0.2.1",
+      userAgent: "Vault API test",
+    });
+  }
+});
+
+test("a rejected audit insert rolls back environment create and delete with generic errors", async () => {
+  expect(await createStatus("env-rollback")).toBe(201);
+  expect(await createEnvironmentStatus("env-rollback", "existing")).toBe(201);
+  const rowsBefore = await db.select().from(environment);
+  const before = await eventCount();
+  await db.execute(
+    sql`ALTER TABLE audit_event ADD CONSTRAINT reject_all CHECK (false) NOT VALID`
+  );
+  try {
+    const responses = [
+      await createEnvironment("env-rollback", "new"),
+      await environmentRequest("DELETE", "env-rollback", "/existing"),
+    ];
+    const bodies = await Promise.all(
+      responses.map(async (response) => {
+        expect(response.status).toBe(500);
+        return await response.json();
+      })
+    );
+    for (const body of bodies) {
+      expect(body).toEqual({
+        defined: false,
+        code: "INTERNAL_SERVER_ERROR",
+        status: 500,
+        message: "Internal server error",
+      });
+    }
+    expect(await db.select().from(environment)).toEqual(rowsBefore);
+    expect(await eventCount()).toBe(before);
+  } finally {
+    await db.execute(sql`ALTER TABLE audit_event DROP CONSTRAINT reject_all`);
+  }
+});
+
+test("project deletion cascades environments and retains all audit history", async () => {
+  expect(await createStatus("env-cascade")).toBe(201);
+  await Promise.all(
+    ["development", "production"].map(async (slug) => {
+      expect(await createEnvironmentStatus("env-cascade", slug)).toBe(201);
+    })
+  );
+  const projectRow = firstRow(await ownedRows("env-cascade"));
+  expect(await environmentRows(projectRow.id)).toHaveLength(2);
+  const historyBefore = await db
+    .select()
+    .from(auditEvent)
+    .where(eq(auditEvent.projectId, projectRow.id));
+  expect(historyBefore).toHaveLength(3);
+  const before = await eventCount();
+  expect(await requestStatus("DELETE", "/env-cascade")).toBe(204);
+  expect(await ownedRows("env-cascade")).toEqual([]);
+  expect(await environmentRows(projectRow.id)).toEqual([]);
+  const history = await db
+    .select()
+    .from(auditEvent)
+    .where(eq(auditEvent.projectId, projectRow.id));
+  expect(history).toHaveLength(4);
+  expect(history).toEqual(expect.arrayContaining(historyBefore));
+  expect(history.map((event) => event.action).toSorted()).toEqual([
+    "environment.create",
+    "environment.create",
+    "project.create",
+    "project.delete",
+  ]);
+  expect(await eventCount()).toBe(before + 1);
+});

@@ -3,7 +3,11 @@ import { auditEvent } from "@jomans-vault/db/schema/vault";
 import type { Context, Principal } from "../context";
 import { o } from "../index";
 
-export type AuditAction = "project.create" | "project.delete";
+export type AuditAction =
+  | "project.create"
+  | "project.delete"
+  | "environment.create"
+  | "environment.delete";
 export interface AuditTarget {
   projectId: string;
   environmentId?: string;
