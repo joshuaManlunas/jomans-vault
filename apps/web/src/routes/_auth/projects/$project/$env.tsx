@@ -23,21 +23,23 @@ import { useRef, useState } from "react";
 import { DeleteSecretDialog } from "@/components/delete-secret-dialog";
 import { EditSecretDialog } from "@/components/edit-secret-dialog";
 import { NewSecretDialog } from "@/components/new-secret-dialog";
+import { SecretHistoryDrawer } from "@/components/secret-history-drawer";
 import { SecretRowActions } from "@/components/secret-row-actions";
 import { SecretValue } from "@/components/secret-value";
+import { dateFormatter } from "@/lib/date-format";
 import { useProjectPage } from "@/lib/project-page";
-
-const dateFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 const EnvironmentSecrets = () => {
   const { secrets } = useProjectPage();
   const { project, env } = Route.useParams();
+  const { session } = Route.useRouteContext();
   const addButton = useRef<HTMLButtonElement>(null);
   const [editing, setEditing] = useState<{
     target: { key: string; version: number };
+    opener: HTMLElement;
+  } | null>(null);
+  const [history, setHistory] = useState<{
+    target: { key: string };
     opener: HTMLElement;
   } | null>(null);
   const [deleting, setDeleting] = useState<{
@@ -131,6 +133,9 @@ const EnvironmentSecrets = () => {
                         opener,
                       })
                     }
+                    onHistory={(opener) =>
+                      setHistory({ target: { key: secret.key }, opener })
+                    }
                     onDelete={(opener) =>
                       setDeleting({ target: { key: secret.key }, opener })
                     }
@@ -148,6 +153,15 @@ const EnvironmentSecrets = () => {
         opener={editing?.opener ?? null}
         onClose={() => setEditing(null)}
         addButton={addButton}
+      />
+      <SecretHistoryDrawer
+        project={project}
+        env={env}
+        target={history?.target ?? null}
+        opener={history?.opener ?? null}
+        onClose={() => setHistory(null)}
+        addButton={addButton}
+        currentUser={{ id: session.user.id, name: session.user.name }}
       />
       <DeleteSecretDialog
         project={project}
