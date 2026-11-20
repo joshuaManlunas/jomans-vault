@@ -11,7 +11,7 @@ import {
 import { Label } from "@jomans-vault/ui/components/label";
 import { Textarea } from "@jomans-vault/ui/components/textarea";
 import { ORPCError } from "@orpc/client";
-import { useForm } from "@tanstack/react-form";
+import { useForm, useSelector } from "@tanstack/react-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { XIcon } from "lucide-react";
 import { useRef, useState } from "react";
@@ -107,6 +107,7 @@ const EditSecretDialogSession = ({
       pending.current = false;
     },
   });
+  const isSaving = useSelector(form.store, (state) => state.isSubmitting);
 
   const reload = async () => {
     if (!target || pending.current || removed.current) {
@@ -158,7 +159,7 @@ const EditSecretDialogSession = ({
       >
         <DialogHeader>
           <DialogTitle>Edit secret</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="wrap-anywhere">
             <span className="font-mono">{target?.key}</span>. Saving replaces
             version {version}.
           </DialogDescription>
@@ -188,6 +189,7 @@ const EditSecretDialogSession = ({
                   className="max-h-64 min-h-32 overflow-y-auto"
                   autoComplete="off"
                   spellCheck={false}
+                  readOnly={isSaving}
                   name={field.name}
                   value={field.state.value}
                   onBlur={field.handleBlur}

@@ -96,7 +96,7 @@ const DeleteSecretDialogSession = ({
       >
         <DialogHeader>
           <DialogTitle>Delete secret</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="wrap-anywhere">
             Delete <span className="font-mono">{target?.key}</span> from this
             environment? Its version history is kept.
           </DialogDescription>
