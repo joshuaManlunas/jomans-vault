@@ -24,7 +24,7 @@ import { ORPCError } from "@orpc/client";
 import { useForm } from "@tanstack/react-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { z } from "zod";
 
 import {
@@ -39,11 +39,13 @@ export const NewSecretDialog = ({
   env,
   existingKeys,
   children,
+  addButtonRef,
 }: {
   project: string;
   env: string;
   existingKeys: readonly string[];
   children: ReactNode;
+  addButtonRef: RefObject<HTMLButtonElement | null>;
 }) => {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -51,7 +53,6 @@ export const NewSecretDialog = ({
     "bad-request" | "other" | null
   >(null);
   const keyInput = useRef<HTMLInputElement>(null);
-  const headerButton = useRef<HTMLButtonElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const created = useRef(false);
 
@@ -120,7 +121,7 @@ export const NewSecretDialog = ({
     >
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-lg font-semibold">Secrets</h2>
-        <DialogTrigger render={<Button ref={headerButton} />}>
+        <DialogTrigger render={<Button ref={addButtonRef} />}>
           Add secret
         </DialogTrigger>
       </div>
@@ -130,7 +131,7 @@ export const NewSecretDialog = ({
         initialFocus={keyInput}
         finalFocus={() =>
           created.current || !opener.current?.isConnected
-            ? headerButton.current
+            ? addButtonRef.current
             : opener.current
         }
       >
