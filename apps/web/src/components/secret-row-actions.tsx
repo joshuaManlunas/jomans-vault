@@ -12,10 +12,12 @@ import { useRef } from "react";
 export const SecretRowActions = ({
   secretKey,
   onEdit,
+  onHistory,
   onDelete,
 }: {
   secretKey: string;
   onEdit: (opener: HTMLElement) => void;
+  onHistory: (opener: HTMLElement) => void;
   onDelete: (opener: HTMLElement) => void;
 }) => {
   const trigger = useRef<HTMLButtonElement>(null);
@@ -44,6 +46,15 @@ export const SecretRowActions = ({
             }}
           >
             Edit
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              if (trigger.current) {
+                onHistory(trigger.current);
+              }
+            }}
+          >
+            History
           </DropdownMenuItem>
           <DropdownMenuItem
             variant="destructive"
