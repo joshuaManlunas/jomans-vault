@@ -207,6 +207,14 @@ class GitHub(Forge):
         for comment in self.nodes(number, "comments", "author { login } body"):
             if codex_reviewed(comment["body"], sha):
                 reviewed.add(login(comment["author"]))
+        # A bot with no findings may post no review at all, only a check run on the commit
+        # (Greptile does this), so a passing check run from the bot's app counts too.
+        pages = self.gh_json("api", f"repos/{self.project_path()}/commits/{sha}/check-runs",
+                             "--paginate", "--slurp")
+        for page in pages:
+            for run in page.get("check_runs", []):
+                if run.get("status") == "completed" and run.get("conclusion") in ("success", "neutral"):
+                    reviewed.add(login((run.get("app") or {}).get("slug")))
         return reviewed
 
     def threads(self, number, unresolved=False):

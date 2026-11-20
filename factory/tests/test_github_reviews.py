@@ -23,7 +23,11 @@ GREPTILE = 'greptile-apps'
 FAKE_GH = SPLIT_FAKE_GH.replace(
     '''elif args[:2] == ["pr", "view"]:
     print(json.dumps({"state": state.get("pr_state", "OPEN")}))''',
-    '''elif args[:2] == ["repo", "view"]:
+    '''elif args[0] == "api" and args[1].startswith("repos/test/repo/commits/") and args[1].endswith("/check-runs"):
+    assert args[2:] == ["--paginate", "--slurp"]
+    sha = args[1].split("/")[4]
+    print(json.dumps([{"check_runs": state.get("check_runs", {}).get(sha, [])}]))
+elif args[:2] == ["repo", "view"]:
     assert args == ["repo", "view", "--json", "nameWithOwner"]
     print(json.dumps({"nameWithOwner": "test/repo"}))
 elif args[:2] == ["pr", "view"]:
@@ -369,6 +373,19 @@ class GitHubReviewTests(unittest.TestCase):
         self.state(reviews=[review(GREPTILE + '[bot]')], comments=[])
         self.job('reviews', self.job_id)
         self.assertEqual(len(self.calls('pr', 'comment')), 1)
+
+    def test_a_bots_passing_check_run_on_head_counts_as_its_review(self):
+        # Greptile with no findings posts only a check run, never a review or comment.
+        self.config_bots([{'login': GREPTILE, 'trigger': '@greptileai review'}])
+        def run(sha=HEAD, slug=GREPTILE, conclusion='success', status='completed'):
+            return {sha: [{'app': {'slug': slug}, 'status': status, 'conclusion': conclusion}]}
+        cases = [(run(), 0), (run(conclusion='neutral'), 0), (run(conclusion='failure'), 3),
+                 (run(status='in_progress', conclusion=None), 3), (run(sha=OLD_HEAD), 3),
+                 (run(slug='socket-security'), 3)]
+        for check_runs, code in cases:
+            with self.subTest(check_runs=check_runs):
+                self.state(reviews=[], comments=[], check_runs=check_runs)
+                self.job('reviews', self.job_id, code=code)
 
     def test_triggered_review_is_polled_until_head_is_complete(self):
         self.state(reviews=[], reviews_on_trigger=[review(GREPTILE)])
