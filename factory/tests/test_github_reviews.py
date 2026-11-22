@@ -402,6 +402,11 @@ class GitHubReviewTests(unittest.TestCase):
             '````html\n<details><img alt="P1"></details>\n\n\n```\n````\n\n'
             '    <details>Indented example</details>'
         )
+        repro = (
+            '<details><summary>Repro</summary>steps\n\n\n'
+            '<details><summary>Fix with agent prompt</summary>Quoted prompt</details>\n'
+            '<img alt="P2" src="/badges/p2.svg">\n</details>\n\n'
+        )
         greptile = (
             '<a href=""><img alt="P2" src="https://example.com/badges/p2.svg" align="top"></a>'
             ' **Changes disappear after saving**\n\n'
@@ -410,14 +415,14 @@ class GitHubReviewTests(unittest.TestCase):
             '```text\nDuplicate instructions with a literal </details>.\n```\n'
             '  <details>More instructions</details>\n'
             '</DETAILS>\n\n'
-            '<details><summary>Another prompt</summary>Also duplicated.</details>\n\n'
+            '<details><summary>FIX with agent prompt</summary>Also duplicated.</details>\n\n'
             '<a href="https://example.com/fix?prompt=The%20whole%20comment">\n'
             '<picture><source media="(prefers-color-scheme: dark)" srcset="/badges/dark.svg">\n'
             '<img alt="Fix in Claude Code" src="/badges/claude.svg"></picture></a>\n'
             '<a href="https://example.com/fix?prompt=The%20whole%20comment">'
             '<img alt="Fix in Codex" src="/badges/codex.svg"></a>\n'
             '<img alt="Open fix badge" src="/badge/fix.svg">\n\n'
-            + example
+            + repro + example
         )
         codex = (
             '**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)'
@@ -425,12 +430,12 @@ class GitHubReviewTests(unittest.TestCase):
             'Return an error before making changes.\n\n'
             '<img src="/badges/p2.svg" alt=P2> Check the error message too.'
         )
-        human = 'The example still applies.\n\n' + example + (
+        human = 'The example still applies.\n\n' + repro + example + (
             '\n\n<a href="/full"><img alt="Screenshot" src="/screenshot.png"></a>'
         )
         for author, body, expected in [
             (GREPTILE, greptile, 'P2 **Changes disappear after saving**\n\n'
-             'Keep the draft until the write succeeds.\n\n' + example),
+             'Keep the draft until the write succeeds.\n\n' + repro + example),
             (CODEX, codex, '**P1  Validate the input first**\n\n'
              'Return an error before making changes.\n\nP2 Check the error message too.'),
             ('human-reviewer', human, human),

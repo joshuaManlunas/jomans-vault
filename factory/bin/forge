@@ -42,6 +42,10 @@ REVIEW_CODE = (
     r"|^(?: {4}|\t)[^\n]*(?:\n(?:[ \t]*\r?\n)*(?: {4}|\t)[^\n]*)*"
 )
 TAG_END = r"""(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>"""
+REVIEW_FIX_PROMPT = re.compile(
+    rf"\s*<summary{TAG_END}\s*(?:prompt\s+to\s+fix\s+with\s+ai|fix\s+with\s+agent\s+prompt)\s*</summary\s*>",
+    re.IGNORECASE,
+)
 REVIEW_IMAGE = r"<img" + TAG_END
 REVIEW_PICTURE = rf"<picture{TAG_END}\s*(?:<source{TAG_END}\s*)*{REVIEW_IMAGE}\s*</picture\s*>"
 REVIEW_MARKUP = re.compile(
@@ -57,16 +61,22 @@ REVIEW_SPACING = re.compile(rf"(?P<code>{REVIEW_CODE})|\r?\n(?:[ \t]*\r?\n){{2,}
 
 def clean_review_body(body):
     """Remove generated review decorations while keeping the Markdown around them."""
-    parts, cursor = [], 0
+    sections, parts, cursor = [], [], 0
+    changed = False
     details = []
     for match in REVIEW_MARKUP.finditer(body):
         if match["open_details"]:
-            details.append(match.start())
+            details.append(match)
         elif match["close_details"] and details:
-            start = details.pop()
+            opening = details.pop()
             if not details:
-                parts.append(body[cursor:start])
+                parts.append(body[cursor:opening.start()])
                 cursor = match.end()
+                if REVIEW_FIX_PROMPT.match(body, opening.end(), match.start()):
+                    changed = True
+                else:
+                    sections.append(("".join(parts), body[opening.start():cursor]))
+                    parts.clear()
         elif not details and match["html_badge"]:
             image = re.search(REVIEW_IMAGE, match[0], re.IGNORECASE)[0]
             alt = re.search(r"""\s+alt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", image, re.IGNORECASE)
@@ -75,13 +85,19 @@ def clean_review_body(body):
             if severity or re.search(r"\bbadges?\b|\bfix in\b|img\.shields\.io", image, re.IGNORECASE):
                 parts.extend((body[cursor:match.start()], severity[1].upper() if severity else ""))
                 cursor = match.end()
+                changed = True
         elif not details and match["markdown_badge"]:
             parts.extend((body[cursor:match.start()], match["severity"].upper()))
             cursor = match.end()
-    if not parts:
+            changed = True
+    if not changed:
         return body
-    cleaned = "".join(parts) + body[cursor:]
-    cleaned = REVIEW_SPACING.sub(lambda m: m[0] if m["code"] else "\n\n", cleaned)
+
+    sections.append(("".join(parts) + body[cursor:], ""))
+    cleaned = "".join(
+        REVIEW_SPACING.sub(lambda m: m[0] if m["code"] else "\n\n", text) + collapsed
+        for text, collapsed in sections
+    )
     return re.sub(r"\A(?:[ \t]*\r?\n)+|(?:\r?\n[ \t]*)+\Z", "", cleaned)
 
 

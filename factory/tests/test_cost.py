@@ -52,6 +52,7 @@ class JobCostTests(unittest.TestCase):
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
+        job.JOBS.mkdir(parents=True)
         self.job_id = "001-first"
         self.other_id = "002-second"
         self.header = f"Job: {self.job_id}. Job folder: {job.job_dir(self.job_id)}/."
@@ -89,6 +90,30 @@ class JobCostTests(unittest.TestCase):
         ], [FINAL])
 
         self.assertEqual(job.cost_usd({"id": self.job_id}), 0.43)
+
+    def test_repeated_cost_checks_reuse_unchanged_rollouts(self):
+        self.write_codex("archived_sessions", "child", [user_message(self.header)], [FINAL])
+        self.write_codex("archived_sessions", "unrelated", [user_message("Other work")], [FINAL])
+
+        with patch.object(job, "codex_rollout", wraps=job.codex_rollout) as parse:
+            self.assertEqual(job.cost_usd({"id": self.job_id}), 0.43)
+            self.assertEqual(parse.call_count, 2)
+            self.assertEqual(job.cost_usd({"id": self.job_id}), 0.43)
+            self.assertEqual(parse.call_count, 2)
+
+    def test_cost_rereads_a_rollout_that_grows(self):
+        self.write_codex("sessions", "child", [user_message(self.header)], [EARLY])
+        self.write_codex("archived_sessions", "unrelated", [user_message("Other work")], [FINAL])
+        self.assertEqual(job.cost_usd({"id": self.job_id}), 0.11)
+
+        path = self.codex / "sessions" / "rollout-child.jsonl"
+        with path.open("a") as f:
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+                    "info": {"total_token_usage": FINAL}}}) + "\n")
+
+        with patch.object(job, "codex_rollout", wraps=job.codex_rollout) as parse:
+            self.assertEqual(job.cost_usd({"id": self.job_id}), 0.43)
+            parse.assert_called_once_with(path)
 
     def test_summary_adds_claude_and_codex(self):
         write_jsonl(job.transcripts_dir() / "claude-child.jsonl", [

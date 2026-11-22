@@ -75,6 +75,7 @@ class DoctorTests(unittest.TestCase):
                     continue
                 self.config["ports"] = {"base": first_port - step * first_job, "step": step}
                 if busy_offset is not None:
+                    sock.listen()
                     self.addCleanup(anchored.pop_all().close)
                 return first_port + anchor
         self.fail("could not find a free set of job ports")
@@ -145,6 +146,23 @@ class DoctorTests(unittest.TestCase):
         (jobs / "999-file").touch()
         port = self.set_job_ports(first_job=8, busy_offset=9)
         self.assertIn(f"FAIL  Job port range: ports already in use: {port}.", self.run_doctor(code=1))
+
+    def test_job_ports_only_check_free_concurrency_slots(self):
+        jobs = self.factory / "jobs"
+        for job_id in ("001-first", "002-second"):
+            job = jobs / job_id / "job.json"
+            job.parent.mkdir(parents=True)
+            job.write_text(json.dumps({"stage": "build", "round": 1, "ended": None}))
+
+        port = self.set_job_ports(first_job=3, busy_offset=0)
+        self.assertIn("SKIP  Job port range: no free job slots", self.run_doctor())
+
+        job = jobs / "002-second" / "job.json"
+        job.write_text(json.dumps({"stage": "needs-human", "round": 1, "ended": "2026-11-23T00:00:00Z"}))
+        self.assertIn(f"FAIL  Job port range: ports already in use: {port}.", self.run_doctor(code=1))
+
+        self.set_job_ports(first_job=3, busy_offset=7)
+        self.assertIn("PASS  Job port range: 3 ports free", self.run_doctor())
 
     def test_missing_browser_reports_configured_setup(self):
         self.config["browser"] = {"cli": "fixture-browser", "setup": "Install the fixture browser"}

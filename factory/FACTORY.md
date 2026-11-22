@@ -593,6 +593,9 @@ ID, including when the same rollout appears in the active and archive
 directories. Cached reads and writes are part of input tokens and receive
 their own rates. Output tokens already include reasoning.
 
+The job command caches parsed rollout usage in `factory/jobs/.codex-rollouts.json`
+and refreshes it when rollouts change. The cache is safe to delete.
+
 The dashboard and `job summary` show estimates based on
 `prices_usd_per_mtok` in `factory/config.json`. The Codex rates use
 OpenAI's standard short-context text prices and the 30-minute cache-write
