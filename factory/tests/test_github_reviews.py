@@ -23,7 +23,12 @@ GREPTILE = 'greptile-apps'
 FAKE_GH = SPLIT_FAKE_GH.replace(
     '''elif args[:2] == ["pr", "view"]:
     print(json.dumps({"state": state.get("pr_state", "OPEN")}))''',
-    '''elif args[:2] == ["repo", "view"]:
+    '''elif args[0] == "api" and args[1].startswith("repos/test/repo/commits/") and args[1].endswith("/check-runs"):
+    assert args[2:] == ["--paginate", "--slurp"]
+    sha = args[1].split("/")[4]
+    pages = state.get("check_run_pages", {}).get(sha, [[]])
+    print(json.dumps([{"check_runs": page} for page in pages]))
+elif args[:2] == ["repo", "view"]:
     assert args == ["repo", "view", "--json", "nameWithOwner"]
     print(json.dumps({"nameWithOwner": "test/repo"}))
 elif args[:2] == ["pr", "view"]:
@@ -110,10 +115,9 @@ def state_comment(bot=CODEX, sha=HEAD, status='completed'):
             'body': '<!-- codex-review-state:v1 ' + json.dumps(data) + ' -->\nOther text'}
 
 
-def thread(resolved=False):
+def thread(resolved=False, *, author='human-reviewer', body='Please fix this.\nSecond line.'):
     return {'id': 'PRRT_thread1', 'isResolved': resolved, 'path': 'demo/greet.py', 'line': 12,
-            'comments': {'nodes': [{'author': {'login': 'human-reviewer'},
-                                    'body': 'Please fix this.\nSecond line.',
+            'comments': {'nodes': [{'author': {'login': author}, 'body': body,
                                     'url': 'https://github.com/test/repo/pull/99#discussion_r1'}]}}
 
 
@@ -369,6 +373,75 @@ class GitHubReviewTests(unittest.TestCase):
         self.state(reviews=[review(GREPTILE + '[bot]')], comments=[])
         self.job('reviews', self.job_id)
         self.assertEqual(len(self.calls('pr', 'comment')), 1)
+
+    def test_a_bots_passing_check_run_on_head_counts_as_its_review(self):
+        self.config_bots([{'login': GREPTILE, 'trigger': '@greptileai review'}])
+
+        def run(sha=HEAD, slug=GREPTILE, conclusion='success', status='completed'):
+            return {'head_sha': sha, 'app': {'slug': slug}, 'status': status, 'conclusion': conclusion}
+
+        for ref, check, verdict in [
+            (HEAD, run(), 'PASS'),
+            (HEAD, run(slug=GREPTILE + '[bot]', conclusion='neutral'), 'PASS'),
+            (HEAD, run(conclusion='failure'), 'TIMEOUT'),
+            (HEAD, run(status='in_progress', conclusion=None), 'TIMEOUT'),
+            (OLD_HEAD, run(sha=OLD_HEAD), 'TIMEOUT'),
+            (HEAD, run(sha=OLD_HEAD), 'TIMEOUT'),
+            (HEAD, run(slug='unrelated-app'), 'TIMEOUT'),
+        ]:
+            with self.subTest(ref=ref, check=check):
+                self.state(reviews=[], comments=[], check_run_pages={ref: [[], [check]]})
+                self.job('reviews', self.job_id, code=0 if verdict == 'PASS' else 3)
+                report = (self.rd / 'reviews.md').read_text()
+                self.assertEqual(report.splitlines()[0], f'REVIEWS: {verdict}')
+
+    def test_forge_threads_clean_bot_badges_and_details_without_changing_prose(self):
+        example = (
+            'See [the guide](https://example.com/guide) and <a href="/docs">the docs</a>.\n\n'
+            'Keep `<img alt="P2">` in examples.\n\n'
+            '````html\n<details><img alt="P1"></details>\n\n\n```\n````\n\n'
+            '    <details>Indented example</details>'
+        )
+        greptile = (
+            '<a href=""><img alt="P2" src="https://example.com/badges/p2.svg" align="top"></a>'
+            ' **Changes disappear after saving**\n\n'
+            'Keep the draft until the write succeeds.\n\n'
+            '<DETAILS open><summary>Prompt To Fix With AI</summary>\n\n'
+            '```text\nDuplicate instructions with a literal </details>.\n```\n'
+            '  <details>More instructions</details>\n'
+            '</DETAILS>\n\n'
+            '<details><summary>Another prompt</summary>Also duplicated.</details>\n\n'
+            '<a href="https://example.com/fix?prompt=The%20whole%20comment">\n'
+            '<picture><source media="(prefers-color-scheme: dark)" srcset="/badges/dark.svg">\n'
+            '<img alt="Fix in Claude Code" src="/badges/claude.svg"></picture></a>\n'
+            '<a href="https://example.com/fix?prompt=The%20whole%20comment">'
+            '<img alt="Fix in Codex" src="/badges/codex.svg"></a>\n'
+            '<img alt="Open fix badge" src="/badge/fix.svg">\n\n'
+            + example
+        )
+        codex = (
+            '**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)'
+            '</sub></sub>  Validate the input first**\n\n'
+            'Return an error before making changes.\n\n'
+            '<img src="/badges/p2.svg" alt=P2> Check the error message too.'
+        )
+        human = 'The example still applies.\n\n' + example + (
+            '\n\n<a href="/full"><img alt="Screenshot" src="/screenshot.png"></a>'
+        )
+        for author, body, expected in [
+            (GREPTILE, greptile, 'P2 **Changes disappear after saving**\n\n'
+             'Keep the draft until the write succeeds.\n\n' + example),
+            (CODEX, codex, '**P1  Validate the input first**\n\n'
+             'Return an error before making changes.\n\nP2 Check the error message too.'),
+            ('human-reviewer', human, human),
+        ]:
+            with self.subTest(author=author):
+                self.state(reviewThreads=[thread(author=author, body=body)])
+                result = subprocess.run(
+                    [sys.executable, str(self.factory / 'bin/forge'), 'threads', '99', '--unresolved'],
+                    cwd=self.root, env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout)[0]['body'], expected)
 
     def test_triggered_review_is_polled_until_head_is_complete(self):
         self.state(reviews=[], reviews_on_trigger=[review(GREPTILE)])

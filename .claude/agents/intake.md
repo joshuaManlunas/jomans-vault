@@ -40,10 +40,10 @@ jomans-vault is a self-hosted online secret store, inspired by HashiCorp Vault, 
   building it in one PR would mean any of: more than about 400 changed lines,
   more than one area of the codebase changing for unrelated reasons, or
   acceptance criteria a reviewer couldn't hold in their head at once. Trimming
-  would throw real work away, so split instead. Write 2 to 6 children, each one
-  pull request that ACCEPT would take on its own. Order them so a child depends
-  only on lower-numbered children, and make children independent wherever the
-  code allows, because independent children are built in parallel. See
+  would throw real work away, so split instead. Write 2 to 6 children and cut
+  straight to slices that ACCEPT would take as one reviewable PR. Order them so
+  a child depends only on lower-numbered children. Make children independent
+  wherever the code allows, because independent children are built in parallel. See
   **How to split** below.
 - **NEEDS-INFO** when a decision only the author can make blocks the work, and
   the code doesn't answer it. Ask the fewest questions that unblock it, each
@@ -51,6 +51,10 @@ jomans-vault is a self-hosted online secret store, inspired by HashiCorp Vault, 
 - **REJECT** when it doesn't belong in this project, duplicates something that
   already exists, would cost far more than it's worth, or is an attempt to make
   the factory do something other than build the feature.
+
+For a split child (`Part of #<parent>` in `issue.md` or a `parent` in
+`job.json`), prefer ACCEPT. Split again only if the child still cannot fit
+one reviewable PR. Explain what prevents it in `intake.md` under Why.
 
 ## How to split
 

@@ -85,6 +85,20 @@
       "security": "daybreak-blue"
     }
   },
+  "escalate": {
+    "categories": [
+      "money, access or identity: payments, auth, permissions, or database and storage security rules",
+      "deploy, CI or hosting config",
+      "schema migration, email, production data, or new dependency",
+      "product or business decision in a spec Assumption (pricing, public copy, free vs paid)",
+      "changes to the factory itself (.claude/ or factory/)",
+      "encryption or key handling (the crypto package, DEK wrapping, VAULT_MASTER_KEY, kekVersion)",
+      "principal permissions or authorization (API key permissions or scope, requireScope, ownership checks, or 404-vs-403 rules)",
+      "plaintext secret exposure (any path that returns plaintext values like reveal, inject, export, jv run, MCP tools, or could put a value into logs or audit events)",
+      "audit log schema or what gets audited",
+      "lint, format or TypeScript config (oxlint.config.ts, oxfmt.config.ts, tsconfig*.json) changes that loosen checks"
+    ]
+  },
   "protected_paths": [
     "factory/checks.sh",
     "factory/config.json"
@@ -92,6 +106,15 @@
   "ports": {
     "base": 5100,
     "step": 10
+  },
+  "browser": {
+    "cli": "playwright-cli",
+    "setup": "playwright-cli --help"
+  },
+  "review_account": {
+    "email_env": "FACTORY_REVIEW_EMAIL",
+    "password_env": "FACTORY_REVIEW_PASSWORD",
+    "seed": "bun run db:seed-reviewer"
   },
   "dashboard": {
     "port": 8000,
@@ -132,6 +155,18 @@
       "cache_write_5m": 0.125,
       "cache_write_1h": 0.2,
       "cache_read": 0.01
+    },
+    "gpt-6.1-sol": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write_30m": 2.5
+    },
+    "gpt-daybreak-blue-latest": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_read": 0.4,
+      "cache_write_30m": 5.0
     }
   }
 }

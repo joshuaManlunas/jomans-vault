@@ -48,6 +48,7 @@ through the scripts. `factory/jobs/` is gitignored runtime state.
 ```
 <repo>/factory/config.json                     concurrency, rounds, labels, routing, prices
 <repo>/factory/checks.sh                       the repo's checks; the gate runs it
+<repo>/factory/bin/doctor                      preflight checks before a run starts
 <repo>/factory/bin/job                         the only writer of job.json
 <repo>/factory/bin/gate                        runs checks.sh in a worktree → round-N/checks.md
 <repo>/factory/bin/route                       risk + surfaces → the job's agents
@@ -164,10 +165,12 @@ When it returns, read `build.md`'s first line:
 
 **gate.** Run `factory/bin/gate <id>`. It prints `GATE: PASS` or `GATE: FAIL`.
 
-- PASS: `factory/bin/job advance <id> review` and go to **review**.
+- On `GATE: PASS`, read `round_kind` in `job.json`. For `bot-fix`, run
+  `factory/bin/job advance <id> approve` and go to **bot reviews**. Otherwise,
+  run `factory/bin/job advance <id> review` and go to **review**.
 - FAIL: `factory/bin/job advance <id> build`. If it refuses because this was the
-  last round, `factory/bin/job advance <id> needs-human` instead. Otherwise
-  spawn a builder for the next round with
+  last round, `factory/bin/job advance <id> needs-human` instead. Otherwise the
+  next round keeps the same `round_kind`. Spawn its builder with
   `The gate failed: read round-<N-1>/checks.md and checks.log, fix it, push, and update build.md.`
   No reviewer runs on a failing build.
 
@@ -194,8 +197,9 @@ pings any bot that hasn't reviewed this commit, and writes
 
 - PASS: spawn `approver` with `<header> PR: #<pr>. Final round: <N>.`
 - FAIL (unresolved threads): `factory/bin/job advance <id> build` (or
-  `needs-human` when it refuses because this was the last round), then spawn a
-  builder for round <N>:
+  `needs-human` when it refuses because this was the last round). Advancing
+  to `build` starts a `bot-fix` round. Its passing **gate** leads directly to
+  **bot reviews**. Spawn a builder for round <N>:
   `Review threads are unresolved: read round-<N-1>/reviews.md, fix or answer and resolve every thread, push, and update build.md for round <N>.`
 - TIMEOUT (a bot never reviewed this commit):
   `factory/bin/job advance <id> needs-human` and tell the user which bot.
@@ -222,16 +226,19 @@ then moves the job to `merged`; `task_cancel` any of its children still running.
 
 ## /factory run
 
-0. **Dashboard.** Unless `config.json` `dashboard.open` is `false`, run
+0. **Preflight and dashboard.** Run `factory/bin/doctor` first. On `DOCTOR: FAIL`,
+   report the `FAIL` lines to the user and stop before starting the dashboard,
+   reading the queue, or starting any job. Continue on `DOCTOR: PASS`.
+
+   Unless `config.json` `dashboard.open` is `false`, run
    `factory/bin/dashboard start`. It starts the dashboard as a detached server
    that outlives this session (or reuses one already running) and prints
    `dashboard: <url> (…)`. Open that URL in the T3 preview pane
    (`preview_open` with `target: {kind: "environment-port", port: <port>, path:
    "/dashboard.html"}`) and give the user the URL in one line. If it fails
-   (for example the port is taken), say so in one line and carry on: the
-   dashboard is never a reason to stop the run. Never start the server with
-   the Bash tool's `run_in_background`: background tasks are killed after two
-   hours. `factory/bin/dashboard stop` stops it.
+   after preflight passes, say so in one line and carry on. Never start the
+   server with the Bash tool's `run_in_background`: background tasks are killed
+   after two hours. `factory/bin/dashboard stop` stops it.
 1. Run `factory/bin/job queue`. Each line is `action  issue  job  stage  note`:
    `resume` (pick it up from its stage), `new` (no job yet), `hold` (no free
    slot, or a split child waiting on a sibling that isn't merged), `wait`
@@ -256,11 +263,13 @@ then moves the job to `merged`; `task_cancel` any of its children still running.
 **Resuming.** State lives in files, so a new session picks up where a dead one
 stopped. For a `resume` job, run its stage's step again: `intake` and `spec`
 respawn their agent; `build` spawns a builder told it is resuming (it reads
-`build.md` and `git log` to see how far the last one got). A T3 child from the
-dead session may still be running: check `task_status` once per job you
-resume, and cancel or adopt it rather than spawning a second one; `gate` runs the
-gate; `review` spawns only the reviewers whose `review-<r>.md` is missing in
-the current round; `approve` goes back to **bot reviews** (run
+`build.md` and `git log` to see how far the last one got). For a `bot-fix` build,
+point the builder to the previous round's `checks.md` and `checks.log` if its
+gate failed, or `reviews.md` if its bot reviews failed. A T3 child from the dead
+session may still be running: check `task_status` once per job you resume, and
+cancel or adopt it rather than spawning a second one; `gate` follows the
+**gate** step above; `review` spawns only the reviewers whose `review-<r>.md`
+is missing in the current round; `approve` goes back to **bot reviews** (run
 `factory/bin/job reviews <id>` and handle its result) unless the round's
 `reviews.md` already says `REVIEWS: PASS` for the current commit, and only then
 respawns the approver; `merging` runs

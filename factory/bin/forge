@@ -34,6 +34,57 @@ def codex_reviewed(body, sha):
     return False
 
 
+# Keep Markdown examples verbatim when looking for HTML and compressing blank lines.
+REVIEW_CODE = (
+    r"^ {0,3}(?P<fence>(?P<fence_char>[`~])(?P=fence_char){2,})[^\n]*\n"
+    r"[\s\S]*?(?:^ {0,3}(?P=fence)(?P=fence_char)*[ \t]*\r?$|\Z)"
+    r"|(?<!`)(?P<ticks>`+)(?!`)[\s\S]*?(?<!`)(?P=ticks)(?!`)"
+    r"|^(?: {4}|\t)[^\n]*(?:\n(?:[ \t]*\r?\n)*(?: {4}|\t)[^\n]*)*"
+)
+TAG_END = r"""(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>"""
+REVIEW_IMAGE = r"<img" + TAG_END
+REVIEW_PICTURE = rf"<picture{TAG_END}\s*(?:<source{TAG_END}\s*)*{REVIEW_IMAGE}\s*</picture\s*>"
+REVIEW_MARKUP = re.compile(
+    rf"(?P<code>{REVIEW_CODE})|(?P<open_details><details{TAG_END})|(?P<close_details></details\s*>)"
+    rf"|(?P<html_badge><a{TAG_END}\s*(?:{REVIEW_PICTURE}|{REVIEW_IMAGE})\s*</a\s*>"
+    rf"|{REVIEW_PICTURE}|{REVIEW_IMAGE})"
+    r"|(?P<markdown_badge>(?:<sub>\s*)*!\[(?P<severity>P\d+)(?: Badge)?\]"
+    r"\(https?://img\.shields\.io/[^)\r\n]+\)(?:\s*</sub>)*)",
+    re.IGNORECASE | re.MULTILINE,
+)
+REVIEW_SPACING = re.compile(rf"(?P<code>{REVIEW_CODE})|\r?\n(?:[ \t]*\r?\n){{2,}}", re.MULTILINE)
+
+
+def clean_review_body(body):
+    """Remove generated review decorations while keeping the Markdown around them."""
+    parts, cursor = [], 0
+    details = []
+    for match in REVIEW_MARKUP.finditer(body):
+        if match["open_details"]:
+            details.append(match.start())
+        elif match["close_details"] and details:
+            start = details.pop()
+            if not details:
+                parts.append(body[cursor:start])
+                cursor = match.end()
+        elif not details and match["html_badge"]:
+            image = re.search(REVIEW_IMAGE, match[0], re.IGNORECASE)[0]
+            alt = re.search(r"""\s+alt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", image, re.IGNORECASE)
+            label = next((value for value in alt.groups() if value is not None), "") if alt else ""
+            severity = re.fullmatch(r"(P\d+)(?: Badge)?", label.strip(), re.IGNORECASE)
+            if severity or re.search(r"\bbadges?\b|\bfix in\b|img\.shields\.io", image, re.IGNORECASE):
+                parts.extend((body[cursor:match.start()], severity[1].upper() if severity else ""))
+                cursor = match.end()
+        elif not details and match["markdown_badge"]:
+            parts.extend((body[cursor:match.start()], match["severity"].upper()))
+            cursor = match.end()
+    if not parts:
+        return body
+    cleaned = "".join(parts) + body[cursor:]
+    cleaned = REVIEW_SPACING.sub(lambda m: m[0] if m["code"] else "\n\n", cleaned)
+    return re.sub(r"\A(?:[ \t]*\r?\n)+|(?:\r?\n[ \t]*)+\Z", "", cleaned)
+
+
 class Forge:
     def __init__(self, config, repo_root):
         self.config = config
@@ -207,6 +258,15 @@ class GitHub(Forge):
         for comment in self.nodes(number, "comments", "author { login } body"):
             if codex_reviewed(comment["body"], sha):
                 reviewed.add(login(comment["author"]))
+        # A clean review may be reported only as a check run from the bot's app.
+        pages = self.gh_json("api", f"repos/{self.project_path()}/commits/{sha}/check-runs",
+                             "--paginate", "--slurp")
+        for page in pages:
+            for run in page.get("check_runs", []):
+                slug = (run.get("app") or {}).get("slug")
+                if (slug and run.get("head_sha", sha) == sha and run.get("status") == "completed"
+                        and run.get("conclusion") in ("success", "neutral")):
+                    reviewed.add(login(slug))
         return reviewed
 
     def threads(self, number, unresolved=False):
@@ -220,7 +280,7 @@ class GitHub(Forge):
             match = re.search(r"#discussion_r(\d+)", c.get("url", ""))
             threads.append({"id": thread["id"], "resolved": thread["isResolved"],
                             "path": thread["path"], "line": thread["line"], "author": login(c.get("author")),
-                            "body": c.get("body", ""), "url": c.get("url", ""),
+                            "body": clean_review_body(c.get("body", "")), "url": c.get("url", ""),
                             "comment_id": int(match[1]) if match else None})
         return threads
 
@@ -400,7 +460,7 @@ class GitLab(Forge):
             threads.append({"id": discussion["id"], "resolved": resolved,
                             "path": position.get("new_path") or position.get("old_path"),
                             "line": position.get("new_line") or position.get("old_line"),
-                            "author": login(note["author"]), "body": note["body"],
+                            "author": login(note["author"]), "body": clean_review_body(note["body"]),
                             "url": f"https://{self.host}/{self.project}/-/merge_requests/{number}#note_{note['id']}",
                             "comment_id": note["id"]})
         return threads
@@ -419,6 +479,7 @@ class GitLab(Forge):
         names the commit: a diff note positioned on it, Codex's review-state
         marker for it, or a body that quotes the SHA (8+ characters).
         """
+        # GitLab commit statuses describe pipeline jobs, so review evidence comes from MR notes.
         notes = self.api(f"{self.endpoint}/merge_requests/{number}/notes", paginate=True)
         notes += [n for d in self.discussions(number) for n in d["notes"]]
         reviewed = set()

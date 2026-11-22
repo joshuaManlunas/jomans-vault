@@ -41,6 +41,7 @@ is in the main checkout; your one file goes there.
 - **Payments and identity**: anything that can grant access, skip a webhook
   signature check, or change who a user is.
 - **Abuse**: public endpoints that can be spammed without a rate limit.
+- **Proxy headers**. Verify that auth, rate limits and audit IPs use `X-Forwarded-For` or similar headers only across a verified proxy trust boundary.
 - **Secrets**: keys, credentials or `.env` values in commits.
 - **Dependencies**: new packages, and whether they are needed and maintained.
 

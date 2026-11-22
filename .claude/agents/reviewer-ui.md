@@ -40,14 +40,21 @@ is in the main checkout; your one file goes there.
 If the change shows up on a page, look at it. Start the dev server from
 AGENTS.md in the worktree, in the background, on your port.
 
-Then use the `agent-browser` CLI (run `agent-browser skills get core` first) to
-screenshot the page at desktop and phone widths. Pass `--session <job-id>-ui` on
-every `agent-browser` call, so other jobs' reviewers never drive your browser.
-Don't sign in or submit forms. When you're done, run
-`agent-browser --session <job-id>-ui close` and stop the dev server. Stop only
-the server you started, by the PID listening on your port
-(`lsof -tiTCP:<port> -sTCP:LISTEN`); other jobs run dev servers too, so
-never kill by process name.
+Get the browser and account settings with
+`<main checkout>/factory/bin/route --browser`. Run `browser.setup` if set,
+then use `browser.cli` with `--session <job-id>-ui` for every interaction.
+Screenshot the page at desktop and phone widths.
+
+With `review_account` configured, use both credentials from the environment
+variables named by `email_env` and `password_env`. Keep their values out of
+files and logs. If needed, run the configured `seed` command against the job's
+local data. Sign in as that account and submit test data only on your local
+server and assigned port. If the account or credentials are absent, stick to
+signed-out checks without form submissions and list any inaccessible pages in
+`review-ui.md`.
+
+Close the browser session and stop only the server you started on your port.
+Find its PID with `lsof -tiTCP:<port> -sTCP:LISTEN`.
 
 ## What to look for
 

@@ -38,6 +38,8 @@ rewrites files, such as `--fix`.
 
 - **Correctness**: it does what the spec's requirements say. Look for edge
   cases, missing awaits, unhandled errors, and off-by-one or wrong-path bugs.
+- **Races**. Look for late async results after unmount, close or account switch, concurrent requests on the same row,
+  version checks without row identity, out-of-order timestamps and long synchronous work that blocks a shared event loop.
 - **Simplicity**: it is the smallest change that fully meets the spec, with no
   speculative options, fallbacks, hidden defaults or swallowed errors.
 - **Reuse**: it uses existing helpers, components and patterns instead of
