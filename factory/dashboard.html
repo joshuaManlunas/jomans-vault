@@ -334,18 +334,21 @@ function verdictOf(line) {
   return m ? m[1] : 'invalid'
 }
 
-// A round's verdicts come from its files: the gate first, then each routed reviewer.
+// A round's verdicts come from its gate, bot review and internal review files.
 async function roundVerdicts(job, n) {
   const key = `${job.id}/${n}`
   if (roundCache.has(key)) return roundCache.get(key)
   const dir = `jobs/${job.id}/round-${n}/`
-  const v = { gate: verdictOf(await fetchFirst(dir + 'checks.md')), github: verdictOf(await fetchFirst(dir + 'reviews.md')), reviews: {} }
-  if (v.gate === 'PASS') {
+  const botFix = job.round_kinds?.[String(n)] === 'bot-fix' || (n === job.round && job.round_kind === 'bot-fix')
+  const v = { gate: verdictOf(await fetchFirst(dir + 'checks.md')), github: verdictOf(await fetchFirst(dir + 'reviews.md')), reviews: {}, botFix }
+  if (v.gate === 'PASS' && !botFix) {
     await Promise.all(Object.keys(job.agents?.reviewers || {}).map(async (r) => {
       v.reviews[r] = verdictOf(await fetchFirst(`${dir}review-${r}.md`))
     }))
   }
-  const settled = v.gate === 'FAIL' || (v.gate === 'PASS' && Object.values(v.reviews).every((x) => x === 'PASS' || x === 'CHANGES'))
+  const reviewed = botFix ? ['PASS', 'FAIL', 'TIMEOUT'].includes(v.github)
+    : Object.values(v.reviews).every((x) => x === 'PASS' || x === 'CHANGES')
+  const settled = v.gate === 'FAIL' || (v.gate === 'PASS' && reviewed)
   if (settled && n < job.round) roundCache.set(key, v)
   return v
 }
@@ -358,7 +361,9 @@ function chip(label, v, waiting, title, extra = '') {
 function roundRow(job, n, v) {
   const current = n === job.round
   const cells = [chip('gate', v.gate, current && job.stage === 'gate', 'gate', 'gate')]
-  if (v.gate === 'PASS') {
+  if (v.botFix) {
+    cells.push('<span class="chip" title="Bot-fix round">bot-fix</span>')
+  } else if (v.gate === 'PASS') {
     for (const r of Object.keys(job.agents.reviewers)) {
       cells.push(chip(SHORT[r] || r, v.reviews[r], current && job.stage === 'review', r))
     }

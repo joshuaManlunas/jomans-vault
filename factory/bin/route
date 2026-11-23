@@ -3,6 +3,8 @@
 
 Usage: route <job-id>
        route --target <role> [<job-id>]
+       route --escalate
+       route --browser
 
 `route <job-id>` reads `risk` and `surfaces` from intake.md (through job.json),
 looks them up in config.json's `routing` and `surface_reviewers` tables, and
@@ -13,6 +15,11 @@ agent as JSON: {"providerInstanceId", "model", "options"}. Fixed roles (intake,
 spec-writer, builder, approver) come from config.json `roles`; a reviewer
 (`reviewer-<r>`) comes from the job's routed `agents.reviewers`, so it needs the
 job id. Every name resolves through config.json `models`.
+
+`route --escalate` prints the configured escalation categories as JSON
+(`{"categories": []}` when config.json has no `escalate` key).
+
+`route --browser` prints the `browser` and `review_account` settings as JSON.
 """
 
 from contextlib import contextmanager
@@ -62,13 +69,19 @@ def config_lock():
 
 
 def main(argv):
+    global CONFIG
+    if argv == ["--escalate"]:
+        print(json.dumps(CONFIG.get("escalate", {"categories": []})))
+        return
+    if argv == ["--browser"]:
+        print(json.dumps({"browser": CONFIG.get("browser"), "review_account": CONFIG.get("review_account")}))
+        return
     if argv[:1] == ["--target"] and len(argv) in (2, 3):
         print(json.dumps(target(*argv[1:])))
         return
     if len(argv) != 1:
-        die("usage: route <job-id> | route --target <role> [<job-id>]")
+        die("usage: route <job-id> | route --target <role> [<job-id>] | route --escalate | route --browser")
     with config_lock():
-        global CONFIG
         CONFIG = json.loads((FACTORY / "config.json").read_text())
         route_job(argv[0])
 

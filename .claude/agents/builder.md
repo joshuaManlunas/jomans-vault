@@ -69,13 +69,18 @@ command you ran and its result, or what the page showed.
 - Never run a command that rewrites files across the repo, such as a lint
   `--fix` over everything.
 - For criteria you can see on a page, start the dev server from AGENTS.md in the
-  worktree on your port, then look at the page with the `agent-browser` CLI (run
-  `agent-browser skills get core` first to learn it). Pass
-  `--session <job-id>-builder` on every `agent-browser` call, so other jobs
-  never drive your browser. Close it with
-  `agent-browser --session <job-id>-builder close` and stop the dev server when
-  you're done. Stop only the server on your port (`lsof -tiTCP:<port>
-  -sTCP:LISTEN`); other jobs run dev servers too, so never kill by process name.
+  worktree on your port. Get the browser and account settings with
+  `<main checkout>/factory/bin/route --browser`. Run `browser.setup` if set,
+  then use `browser.cli` with `--session <job-id>-builder` for every interaction.
+- With `review_account` configured, use both credentials from the environment
+  variables named by `email_env` and `password_env`. Keep their values out of
+  files and logs. If needed, run the configured `seed` command against the
+  job's local data. Sign in as that account and submit test data only on your
+  local server and assigned port. If the account or credentials are absent,
+  stick to signed-out checks without form submissions and list any inaccessible
+  pages in `build.md`.
+- Close the browser session and stop only the server you started on your port.
+  Find its PID with `lsof -tiTCP:<port> -sTCP:LISTEN`.
 
 ## Review threads
 

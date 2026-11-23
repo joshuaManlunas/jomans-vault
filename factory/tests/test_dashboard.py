@@ -1,5 +1,7 @@
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -9,6 +11,35 @@ import unittest
 import urllib.request
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+# Runs the page's own poll() and loadJobs() in node against the real server; the
+# DOM is reduced to the status line and a regex link reader for directory listings.
+POLL_HARNESS = r"""
+const [base, src] = process.argv.slice(1)
+const realFetch = fetch
+globalThis.fetch = (url, opts) => realFetch(base + url, opts)
+globalThis.DOMParser = class {
+  parseFromString(html) {
+    const hrefs = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1])
+    return { querySelectorAll: () => hrefs.map((h) => ({ getAttribute: () => h })) }
+  }
+}
+const status = { className: '', innerHTML: '' }
+const $ = () => status
+let jobs = [], prLabel = 'PR', openJobId = null
+const render = async () => {}
+eval(src)
+poll().then(() => console.log(JSON.stringify({ status, ids: jobs.map((j) => j.id) })))
+"""
+
+
+def page_functions(*names):
+    html = (REPO / "factory/dashboard.html").read_text()
+    parts = [re.search(r"^const esc = .*?\n\n", html, re.M | re.S).group()]
+    for name in names:
+        parts.append(re.search(rf"^(?:async )?function {name}\(.*?^}}\n", html, re.M | re.S).group())
+    return "".join(parts)
 
 
 def free_port():
@@ -102,6 +133,37 @@ class DashboardTests(unittest.TestCase):
         self.run_dashboard("start")
         pid = int((self.factory / "jobs/.dashboard.pid").read_text())
         self.assertIn(f"stopped (pid {pid})", self.run_dashboard("stop"))
+
+    @unittest.skipUnless(shutil.which("node"), "needs node to run the page's script")
+    def test_an_unreadable_job_is_reported_and_clears_once_repaired(self):
+        # A broken job.json used to vanish from the board with a healthy status line.
+        jobs = self.factory / "jobs"
+        for job_id in ("001-good", "002-broken", "003-missing"):
+            (jobs / job_id).mkdir(parents=True)
+        good = {"id": "001-good", "stage": "build", "cost_usd": 1.5}
+        (jobs / "001-good/job.json").write_text(json.dumps(good))
+        (jobs / "002-broken/job.json").write_text('{"id": "002-broken", "sta')
+        self.run_dashboard("start")
+        src = page_functions("fetchText", "poll", "loadJobs")
+
+        def poll():
+            out = subprocess.run(["node", "-e", POLL_HARNESS, f"http://127.0.0.1:{self.port}/", src],
+                                 capture_output=True, text=True, timeout=20)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            return json.loads(out.stdout)
+
+        broken = poll()
+        self.assertEqual(broken["ids"], ["001-good"])
+        self.assertEqual(broken["status"]["className"], "status error")
+        self.assertIn("could not read 002-broken, 003-missing", broken["status"]["innerHTML"])
+
+        (jobs / "002-broken/job.json").write_text(json.dumps({**good, "id": "002-broken"}))
+        (jobs / "003-missing/job.json").write_text(json.dumps({**good, "id": "003-missing"}))
+        repaired = poll()
+        self.assertEqual(repaired["ids"], ["001-good", "002-broken", "003-missing"])
+        self.assertEqual(repaired["status"]["className"], "status")
+        self.assertNotIn("could not read", repaired["status"]["innerHTML"])
+
 
 if __name__ == "__main__":
     unittest.main()

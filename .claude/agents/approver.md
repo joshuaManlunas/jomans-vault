@@ -38,36 +38,26 @@ APPROVE only if all of these hold:
 
 - Every acceptance criterion in the spec is met, with evidence in build.md that
   you find convincing. Spot-check at least one criterion yourself.
-- The final round's `checks.md` says `GATE: PASS`, every review in it is
-  `VERDICT: PASS`, and no Note in them describes a real problem.
+- The final round's `checks.md` says `GATE: PASS`. In the most recent round
+  with internal reviews (`review-*.md`), every review says `VERDICT: PASS`
+  and no Note describes a real problem.
 - The final round's `reviews.md` says `REVIEWS: PASS` for the branch's current
   commit. Read the threads earlier rounds resolved: a thread "answered" with a
   weak reason instead of fixed is a real problem.
 - The change stays inside intake's Scope.
 
-ESCALATE if any of them fails, or if the change:
+Read `escalate.categories` from `factory/config.json` by running the main
+checkout's `factory/bin/route --escalate` using its absolute path.
 
-- touches money, access or identity: payments, auth, permissions, or database
-  and storage security rules;
-- changes deploy, CI or hosting config;
-- migrates a database schema, sends email, writes production data, or adds a
-  dependency;
-- rests on a spec Assumption that is really a product or business decision, such
-  as pricing, public copy about the business, or what is free versus paid;
-- changes the factory itself: anything under `.claude/` or `factory/`.
+ESCALATE if the change matches a configured category. A real defect or any
+failed criterion above always requires ESCALATE, regardless of the categories.
+If all criteria pass and the change has no defect or category match, APPROVE.
+For sensitive areas outside the configured categories, such as auth, migrations,
+deploy config or dependencies, record what you checked under `## Notes` in
+`decision.md` when approving.
 
-In jomans-vault, also ESCALATE when the change:
-
-- touches encryption or key handling (the crypto package, DEK wrapping,
-  `VAULT_MASTER_KEY`, `kekVersion`): a mistake here can make every stored value
-  unreadable;
-- changes which principal can do what: API key permissions or scope,
-  `requireScope`, ownership checks, or the 404-vs-403 rules;
-- adds or changes any path that returns plaintext values (`reveal`, `inject`,
-  export, `jv run`, MCP tools), or could put a value into logs or audit events;
-- changes the audit log's schema or what gets audited;
-- changes lint, format or TypeScript config (`oxlint.config.ts`,
-  `oxfmt.config.ts`, `tsconfig*.json`) in a way that loosens checks.
+Tailor `escalate.categories` in `factory/config.json` at install time as
+described in `factory/ADAPT.md`.
 
 ## Write decision.md
 
@@ -82,6 +72,10 @@ Two or three sentences.
 
 ## Acceptance criteria
 1. <criterion>: met / not met, and how you know
+
+## Notes
+Include when approving a sensitive change outside the configured escalation
+categories. List what you checked in that area.
 
 ## For the human
 Only when you escalate: the exact decision or check you need from them, and the

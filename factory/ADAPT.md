@@ -27,11 +27,12 @@ Find them in `AGENTS.md` / `CLAUDE.md`, `package.json` scripts, `Makefile`,
   `--update-snapshots`). Exit non-zero on any failure.
 - It runs with a job's worktree as the working directory: use relative paths.
 - Keep it as fast as the project allows; it runs several times per job.
+- Configure the adopting repo's CI to run `bash factory/checks.sh`.
 
 ## 2. `factory/config.json`
 
 Already set: `forge`, `base_branch`, `merge_method`, `review_bots.bots`,
-`concurrency` (1, for a careful start). Check two more:
+`concurrency` (1, for a careful start). Review these settings:
 
 - `protected_paths`: keep the two factory entries. Add a path only when no job
   should ever change it (CI config, deploy config, migrations, if that's the
@@ -39,9 +40,47 @@ Already set: `forge`, `base_branch`, `merge_method`, `review_bots.bots`,
   code reviewer catches weakened tests. Patterns are fnmatch, so `*` matches
   `/` too.
 - `ports.base`: move it if the project already uses ports 5100–5199.
+- `escalate.categories`: tailor the list at install time to the changes that
+  always need a human decision. `factory/config.json` is a protected path in
+  installed repos, so jobs cannot edit it themselves.
+- `browser`: sets the browser CLI (`cli`) and an optional `setup` command to
+  run before it. Choose a CLI that supports named sessions (`--session`) and
+  can close them. Verify the settings with `factory/bin/route --browser`.
+- `review_account`: defaults to `null` for signed-out checks without form
+  submissions. For authenticated review, seed a test account in the job's
+  local dev database. For example, provide a `db:seed-reviewer` script and set
+  `review_account` to `{"email_env": "REVIEW_EMAIL", "password_env": "REVIEW_PASSWORD", "seed": "npm run db:seed-reviewer"}`.
+  Omit `seed` if the account already exists locally. Supply the named
+  variables to the agents and seed script through their environment. Keep
+  credential values out of repo files, `job.json` and review artifacts.
 
 Leave `models`, `roles`, `routing` and `surface_reviewers` alone unless the
 user asks; `/setup-factory` is how they change them.
+
+For installs upgraded from a Claude-only price table, add the Codex entries
+from the source `factory/config.json` to `prices_usd_per_mtok`. The installer
+preserves the project's existing table. See Job cost in `factory/FACTORY.md`.
+
+## Optional `factory/preflight.sh`
+
+Add this repo-owned hook for project-specific prerequisites. `factory/bin/doctor`
+runs it with Bash from the repo root before `/factory run` starts any jobs.
+Keep it non-interactive. A nonzero exit blocks the run, so print a short fix
+hint with each failure. For example, a Docker Compose project can check that
+its database service publishes the port it expects:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+# Check Docker is running.
+docker info >/dev/null 2>&1 || { echo 'Start Docker.' >&2; exit 1; }
+# Check this Compose project's db service owns the expected local port.
+binding=$(docker compose port db 5432 2>/dev/null) || binding=''
+[[ "$binding" == '127.0.0.1:5432' ]] || {
+  echo 'Start the db service with 127.0.0.1:5432 published.' >&2
+  exit 1
+}
+```
 
 ## 3. Agents (`.claude/agents/`)
 
@@ -58,8 +97,8 @@ names, first-line formats or one-line replies.
   meets queries, shells or HTML.
 - `reviewer-ui.md`: where the design tokens, theme and shared components live.
 - `reviewer-ux.md`: the kinds of users the app has.
-- `approver.md`: add to the ESCALATE list what a human must always see in this
-  project.
+- `approver.md`: the approver reads the escalation policy from
+  `escalate.categories` in `factory/config.json`.
 
 ## 4. Agent docs
 

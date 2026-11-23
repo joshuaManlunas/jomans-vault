@@ -37,6 +37,10 @@
       "cache": false,
       "interactive": true
     },
+    "db:seed-reviewer": {
+      "cache": false,
+      "passThroughEnv": ["FACTORY_REVIEW_EMAIL", "FACTORY_REVIEW_PASSWORD"]
+    },
     "db:studio": {
       "cache": false,
       "persistent": true

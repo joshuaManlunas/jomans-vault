@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""Check the main checkout before the factory starts any jobs."""
+
+import errno
+import importlib.util
+from importlib.machinery import SourceFileLoader
+import json
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+
+REPO = Path(__file__).resolve().parents[2]
+FACTORY = REPO / "factory"
+HOST = "127.0.0.1"
+
+
+def load_factory_script(name):
+    module_name = "factory_" + name
+    loader = SourceFileLoader(module_name, str(FACTORY / "bin" / name))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def forge_auth(config):
+    forge_module = load_factory_script("forge")
+    try:
+        forge = forge_module.load(config, REPO)
+        login = forge.whoami()["login"]
+    except forge_module.Error as exc:
+        return "FAIL", str(exc)
+    return "PASS", f"authenticated as {login}"
+
+
+def dashboard_port(config):
+    if (config.get("dashboard") or {}).get("open") is False:
+        return "SKIP", "dashboard.open is false"
+    dashboard = load_factory_script("dashboard")
+    port = dashboard.port()
+    if not 1 <= port <= 65535:
+        return "FAIL", f"invalid port {port}"
+    if not dashboard.listening(port):
+        return "PASS", f"port {port} is free"
+    if dashboard.serves_this_factory(port):
+        return "PASS", f"this checkout's dashboard is serving on port {port}"
+    return "FAIL", (f"port {port} is in use by another process. Set dashboard.port or "
+                    "FACTORY_DASHBOARD_PORT to a free port.")
+
+
+def job_ports(config):
+    settings = config.get("ports") or {}
+    base = settings.get("base", 5100)
+    step = settings.get("step", 10)
+    concurrency = config.get("concurrency", 3)
+    jobs = FACTORY / "jobs"
+    numbers = []
+    active = 0
+    if jobs.exists():
+        for path in jobs.iterdir():
+            prefix = path.name.split("-", 1)[0]
+            if path.is_dir() and prefix.isdecimal():
+                numbers.append(int(prefix))
+            job_file = path / "job.json"
+            # The job writer sets ended only for waiting and terminal stages.
+            if job_file.is_file() and json.loads(job_file.read_text()).get("ended") is None:
+                active += 1
+    slots = max(0, concurrency - active)
+    if not slots:
+        return "SKIP", "no free job slots"
+    first = max(numbers, default=0) + 1
+    ports = sorted({base + step * number + offset
+                    for number in range(first, first + slots) for offset in range(3)})
+    if any(not 1 <= port <= 65535 for port in ports):
+        return "FAIL", "the next job slots require ports outside 1–65535. Check ports.base and ports.step."
+    busy = []
+    for port in ports:
+        with socket.socket() as sock:
+            try:
+                sock.bind((HOST, port))
+            except OSError as exc:
+                if exc.errno != errno.EADDRINUSE:
+                    raise
+                busy.append(str(port))
+    if busy:
+        return "FAIL", f"ports already in use: {', '.join(busy)}. Stop their owners or change ports.base."
+    return "PASS", f"{len(ports)} ports free for the next {slots} job slots"
+
+
+def browser_cli(config):
+    browser = config.get("browser", {})
+    cli = (browser or {}).get("cli", "agent-browser")
+    if browser is None or browser is False or not cli:
+        return "SKIP", "disabled"
+    if shutil.which(cli):
+        return "PASS", f"{cli} is on PATH"
+    setup = browser.get("setup")
+    hint = f"Follow browser.setup: {setup}" if setup else f"Install {cli} and add it to PATH."
+    return "FAIL", f"{cli} is missing from PATH. {hint}"
+
+
+def checkout_conflicts(_config):
+    diff = subprocess.check_output(["git", "diff", "--name-only", "--diff-filter=U", "-z"],
+                                   cwd=REPO, stderr=subprocess.PIPE, text=True, errors="backslashreplace")
+    if diff:
+        files = diff.rstrip("\0").split("\0")
+        return "FAIL", f"unmerged files: {', '.join(files)}"
+    merge_head = subprocess.check_output(["git", "rev-parse", "--git-path", "MERGE_HEAD"],
+                                         cwd=REPO, stderr=subprocess.PIPE, text=True).rstrip("\n")
+    if (REPO / merge_head).is_file():
+        return "FAIL", "a merge is in progress. Finish or abort it before starting jobs."
+    return "PASS", "no unmerged files or merge in progress"
+
+
+def project_preflight(_config):
+    hook = FACTORY / "preflight.sh"
+    if not hook.exists():
+        return "SKIP", "no repo hook"
+    result = subprocess.run(["bash", "factory/preflight.sh"], cwd=REPO, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    if result.returncode == 0:
+        return "PASS", "hook succeeded"
+    output = " ".join(result.stdout.split())
+    if len(output) > 240:
+        output = output[:237] + "..."
+    detail = f"hook exited {result.returncode}"
+    if output:
+        detail += f": {output}"
+    return "FAIL", detail
+
+
+def main():
+    try:
+        config = json.loads((FACTORY / "config.json").read_text())
+        if not isinstance(config, dict):
+            raise ValueError("factory/config.json must contain an object")
+    except (OSError, ValueError) as exc:
+        print(f"FAIL  Config: {exc}")
+        print("DOCTOR: FAIL")
+        return 1
+
+    checks = (
+        ("Forge auth", forge_auth),
+        ("Dashboard port", dashboard_port),
+        ("Job port range", job_ports),
+        ("Browser CLI", browser_cli),
+        ("Main checkout conflicts", checkout_conflicts),
+        ("factory/preflight.sh", project_preflight),
+    )
+    failed = False
+    for name, check in checks:
+        try:
+            status, detail = check(config)
+        except subprocess.CalledProcessError as exc:
+            status, detail = "FAIL", exc.stderr or str(exc)
+        except (OSError, ValueError, TypeError) as exc:
+            status, detail = "FAIL", str(exc)
+        failed |= status == "FAIL"
+        print(f"{status}  {name}: {' '.join(detail.splitlines())}")
+    print("DOCTOR: FAIL" if failed else "DOCTOR: PASS")
+    return int(failed)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -160,7 +160,7 @@ PR ready and posts escalations, so the orchestrator never improvises them.
 | `agents` | `{"reviewers": {"code": "opus", ...}}`, written by `route` |
 | `gate` | the current round's gate verdict |
 | `reviews` | `{reviewer: PASS \| CHANGES \| pending \| invalid}` |
-| `cost_usd` | API-equivalent cost of the job's Claude agents |
+| `cost_usd` | API-equivalent cost of the job's Claude and Codex agents |
 | `started`, `ended` | timestamps; `ended` is set in waiting and terminal stages |
 | `children` | on a split parent: `[{"issue", "title", "depends_on": [issue numbers]}]`, written by `job split`; otherwise null |
 | `parent` | on a split child: the parent's issue number; otherwise null |
@@ -575,14 +575,43 @@ Close them first if you build on this.
 | **Tool limits** | Frontmatter `tools:` gave intake no shell and reviewers no Edit | Every child has full tools | Instructions say which one file each agent may write; scripts refuse illegal state moves |
 | **Intake has a shell** | Intake read untrusted issue text without Bash, so a prompt injection couldn't run commands | Intake can run commands | The label is still the trust boundary: only triage/write users can queue an issue |
 | **Builder stop hook** | A `SubagentStop` hook ran `checks.sh` before the builder could finish | No hook (`gate --hook` is unused) | The task tells the builder to pass the checks before replying READY; the gate still decides |
-| **Codex cost** | All agents were Claude, all priced | Codex children aren't counted | The dashboard undercounts jobs by their builder and UI reviewer |
 | **Builder memory** | One builder per job, resumed each round | A fresh builder per round | build.md's per-round Log and `git log` carry the history |
 
-Cost for Claude children still works: `job sync` reads both native subagent
-transcripts and T3 child sessions under `~/.claude/projects/<repo>/`, prices
-them with `prices_usd_per_mtok`, and stops with an error on an unpriced model.
-The transcript format isn't a documented interface, so a Claude Code update
-could break this.
+## Job cost
+
+`job sync` reads native Claude subagent and T3 Claude child transcripts under
+`~/.claude/projects/<repo>/` (or `CLAUDE_CONFIG_DIR`). It reads T3 Codex rollouts
+under `sessions/` and `archived_sessions/` in `CODEX_HOME` (default
+`~/.codex`). T3's Codex shadow home shares those directories with its
+configured Codex home. Set `CODEX_HOME` for the job command if T3 uses a
+custom home.
+
+The first recorded Codex task must contain the matching job header and
+absolute job-folder path. Each fresh T3 child has one model and one session
+ID. Cost uses the largest cumulative `total_token_usage` snapshot per session
+ID, including when the same rollout appears in the active and archive
+directories. Cached reads and writes are part of input tokens and receive
+their own rates. Output tokens already include reasoning.
+
+The job command caches parsed rollout usage in `factory/jobs/.codex-rollouts.json`
+and refreshes it when rollouts change. The cache is safe to delete.
+
+The dashboard and `job summary` show estimates based on
+`prices_usd_per_mtok` in `factory/config.json`. The Codex rates use
+OpenAI's standard short-context text prices and the 30-minute cache-write
+rate. The estimate excludes service-tier and long-context adjustments.
+`gpt-daybreak-blue-latest` uses the published GPT-5.6 Sol rates. The configured
+rates apply to historical rollouts as well. See
+[GPT-6.1 Sol pricing](https://developers.openai.com/api/docs/models/gpt-6.1-sol),
+[Daybreak Blue alias](https://developers.openai.com/api/docs/models/gpt-daybreak-blue-latest),
+and [GPT-5.6 Sol pricing](https://developers.openai.com/api/docs/models/gpt-5.6-sol).
+
+Cost depends on the rollouts available locally and their on-disk format. The
+job command reports an error when a matching session has usage but its model
+has no configured price, or when it cannot identify a single Codex model.
+`install.sh --update` preserves an existing price table. Copy the Codex rate
+entries from this repo when updating a factory installation with a
+Claude-only table.
 
 ## Operating it
 
@@ -685,6 +714,5 @@ Open problems in this copy, roughly in order of value:
   so this probably needs read-only instructions enforced by a check, or a
   provider-side sandbox.
 - Run intake without a shell again, since it reads untrusted text.
-- Count Codex cost from Codex session logs.
 - Let a split child see its siblings' merged code before its own intake, so
   dependent children are scoped against what actually landed.

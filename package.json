@@ -32,6 +32,7 @@
     "db:studio": "turbo run db:studio -F @jomans-vault/db --",
     "db:generate": "turbo run db:generate -F @jomans-vault/db --",
     "db:migrate": "turbo run db:migrate -F @jomans-vault/db --",
+    "db:seed-reviewer": "turbo run db:seed-reviewer -F @jomans-vault/auth --",
     "db:start": "docker compose up -d postgres",
     "db:watch": "docker compose up postgres",
     "db:stop": "docker compose stop postgres",
