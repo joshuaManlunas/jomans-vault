@@ -9,9 +9,10 @@ import {
 } from "@jomans-vault/ui/components/sheet";
 import { Skeleton } from "@jomans-vault/ui/components/skeleton";
 import { ORPCError } from "@orpc/client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { RefObject } from "react";
 
+import { RollbackSecretDialog } from "@/components/rollback-secret-dialog";
 import { dateFormatter } from "@/lib/date-format";
 import { client } from "@/utils/orpc";
 
@@ -48,7 +49,35 @@ const SecretHistoryBody = ({
   onRetry: () => void;
 }) => {
   const [history, setHistory] = useState<HistoryState>({ status: "loading" });
+  const [rollbackTarget, setRollbackTarget] = useState<{
+    version: number;
+    opener: HTMLElement;
+  } | null>(null);
+  const successFocus = useRef<HTMLElement>(null);
+  const versionId = useId();
   const secretKey = target?.key;
+
+  const reloadAfterRollback = async (
+    _result: Awaited<ReturnType<typeof client.secrets.rollback>>
+  ) => {
+    if (!secretKey) {
+      return;
+    }
+    try {
+      const versions = await client.secrets.versions({
+        project,
+        env,
+        key: secretKey,
+      });
+      const newestFirst: typeof versions = [];
+      for (const version of versions) {
+        newestFirst.unshift(version);
+      }
+      setHistory({ status: "success", versions: newestFirst });
+    } catch {
+      setHistory({ status: "error" });
+    }
+  };
 
   useEffect(() => {
     if (!open || !secretKey) {
@@ -108,7 +137,13 @@ const SecretHistoryBody = ({
               : "Couldn't load this secret's history."}
           </p>
           {history.status === "error" && (
-            <Button variant="outline" onClick={onRetry}>
+            <Button
+              ref={(element) => {
+                successFocus.current = element;
+              }}
+              variant="outline"
+              onClick={onRetry}
+            >
               Retry
             </Button>
           )}
@@ -119,7 +154,14 @@ const SecretHistoryBody = ({
           {history.versions.map((version, index) => (
             <li key={version.version} className="flex flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">Version {version.version}</span>
+                <span
+                  id={`${versionId}-${version.version}`}
+                  ref={index === 0 ? successFocus : undefined}
+                  tabIndex={-1}
+                  className="font-medium"
+                >
+                  Version {version.version}
+                </span>
                 {index === 0 && <Badge variant="secondary">Current</Badge>}
               </div>
               {version.createdByType === "user" &&
@@ -136,9 +178,41 @@ const SecretHistoryBody = ({
               >
                 {dateFormatter.format(new Date(version.createdAt))}
               </time>
+              {index > 0 && (
+                <Button
+                  variant="outline"
+                  className="self-start"
+                  aria-describedby={`${versionId}-${version.version}`}
+                  onClick={(event) =>
+                    setRollbackTarget({
+                      version: version.version,
+                      opener: event.currentTarget,
+                    })
+                  }
+                >
+                  Roll back to this version
+                </Button>
+              )}
             </li>
           ))}
         </ol>
+      )}
+      {secretKey && (
+        <RollbackSecretDialog
+          project={project}
+          env={env}
+          secretKey={secretKey}
+          version={rollbackTarget?.version ?? null}
+          nextVersion={
+            history.status === "success"
+              ? (history.versions[0]?.version ?? 0) + 1
+              : 0
+          }
+          opener={rollbackTarget?.opener ?? null}
+          successFocus={successFocus}
+          onClose={() => setRollbackTarget(null)}
+          onSuccess={reloadAfterRollback}
+        />
       )}
     </>
   );
