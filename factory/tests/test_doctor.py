@@ -176,6 +176,21 @@ class DoctorTests(unittest.TestCase):
                 self.config["browser"] = browser
                 self.assertIn("SKIP  Browser CLI: disabled", self.run_doctor())
 
+    def test_computer_use_accepts_chrome_or_the_fallback_cli(self):
+        app = "Factory Fixture Chrome"
+        self.config["browser"] = {"computer_use": True, "chrome_app": app, "cli": "agent-browser"}
+        self.assertIn(f"PASS  Browser CLI: {app} is unavailable for computer use. Fallback: agent-browser is on PATH",
+                      self.run_doctor())
+        (self.fake_bin / "agent-browser").unlink()
+        self.assertIn(f"FAIL  Browser CLI: {app} is unavailable for computer use. Fallback: agent-browser is missing",
+                      self.run_doctor(code=1))
+        if sys.platform == "darwin":
+            self.fake_cli("open", f'[ "$#" = 2 ] && [ "$1" = "-Ra" ] && [ "$2" = "{app}" ]\n')
+        else:
+            self.fake_cli("chromium", "exit 0\n")
+        self.assertIn(f"PASS  Browser CLI: {app} is available for computer use. Fallback: agent-browser is missing",
+                      self.run_doctor())
+
     def test_unauthenticated_forge_reports_cli_error(self):
         self.fake_cli("gh", "echo 'Authenticate with gh auth login' >&2\nexit 1\n")
         self.assertIn("failed: Authenticate with gh auth login", self.run_doctor(code=1))

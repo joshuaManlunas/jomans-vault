@@ -15,15 +15,15 @@ class BrowserConfigTests(unittest.TestCase):
         browser = {"cli": "browser-for-tests", "setup": "browser-for-tests setup"}
         account = {"email_env": "REVIEW_EMAIL", "password_env": "REVIEW_PASSWORD", "seed": "seed-reviewer"}
         credentials = {"REVIEW_EMAIL": "reviewer@example.invalid", "REVIEW_PASSWORD": "test-only-password"}
-        signed_out = {"browser": browser, "review_account": None}
-        signed_in = {"browser": browser, "review_account": account}
+        signed_out = {"browser": browser, "review_account": None, "env_files": []}
+        signed_in = {"browser": browser, "review_account": account, "env_files": ["apps/web/.env"]}
 
         with tempfile.TemporaryDirectory() as tmp:
             factory = Path(tmp)
             (factory / "bin").mkdir()
             route = shutil.copy(ROUTE, factory / "bin" / "route")
             for label, config, expected in (
-                ("absent", {}, {"browser": None, "review_account": None}),
+                ("absent", {}, {"browser": None, "review_account": None, "env_files": []}),
                 ("null", signed_out, signed_out),
                 ("configured", signed_in, signed_in),
             ):
@@ -35,3 +35,12 @@ class BrowserConfigTests(unittest.TestCase):
                     self.assertEqual(json.loads(result.stdout), expected)
                     for value in credentials.values():
                         self.assertNotIn(value, result.stdout + result.stderr)
+
+    def test_browser_tester_resolves_its_configured_profile(self):
+        config = json.loads((ROUTE.parents[1] / "config.json").read_text())
+        profile = config["models"][config["roles"]["browser-tester"]]
+        result = subprocess.run([str(ROUTE), "--target", "browser-tester"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "providerInstanceId": profile["provider"], "model": profile["model"], "options": profile.get("options", {}),
+        })

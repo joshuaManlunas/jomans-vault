@@ -29,15 +29,17 @@ worktree           → factory/<job-id> from origin/<base>
 spec-writer (opus) → spec.md
 builder (sol)      → commits; the first push opens a draft PR "Closes #<n>"
 gate (script)      → checks.sh; FAIL → builder gets the log, no reviewers spawned
-reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → reviewers
+browser (Terra)    → when needed, test HEAD in Chrome; FAIL → builder; BLOCKED → needs-human
+reviewers (routed) → parallel, WAIT FOR ALL; CHANGES → builder → gate → browser when needed
 bot reviews        → PR ready; the review bots review HEAD; any unresolved thread → builder
 approver (opus)    → APPROVE: sync origin/<base>, gate, merge the PR
                      ESCALATE: PR ready, decision as PR comment, label factory:needs-human
 ```
 
-A job has at most `max_rounds` build rounds (`config.json`); a round is one
-build → gate → review pass. `factory/bin/job advance` sends the job to
-`needs-human` instead of another round when the last one fails.
+A job has at most `max_rounds` build rounds (`config.json`). A normal round
+goes from build through gate, browser when needed, then review. A bot-fix
+round goes from build through gate and browser when needed, then to approve
+for bot reviews. A failure on the last round goes to `needs-human`.
 
 ## Files
 
@@ -58,6 +60,8 @@ through the scripts. `factory/jobs/` is gitignored runtime state.
 <repo>/factory/jobs/<job-id>/spec.md
 <repo>/factory/jobs/<job-id>/build.md
 <repo>/factory/jobs/<job-id>/round-<N>/checks.md        the gate's verdict for round N
+<repo>/factory/jobs/<job-id>/round-<N>/browser.md       the browser verdict for HEAD
+<repo>/factory/jobs/<job-id>/round-<N>/browser/         one PNG per executed browser step
 <repo>/factory/jobs/<job-id>/round-<N>/review-<r>.md    one per routed reviewer
 <repo>/factory/jobs/<job-id>/decision.md                APPROVE or ESCALATE
 <repo>/factory/jobs/<job-id>/feedback-<k>.md            the user's feedback on an escalated job
@@ -77,15 +81,18 @@ agent can run on any provider T3 offers, so its model comes from config, not
 from the agent file:
 
 - `target`: the JSON printed by `factory/bin/route --target <role>` for
-  `intake`, `spec-writer`, `builder` and `approver` (config.json `roles`), or
-  by `factory/bin/route --target reviewer-<r> <id>` for a reviewer (the job's
-  routed `agents.reviewers`). Pass it as-is. If T3 says the provider or model
-  is unavailable, stop that job and tell the user; never switch models.
+  `intake`, `spec-writer`, `builder`, `browser-tester` and `approver`
+  (config.json `roles`), or by `factory/bin/route --target reviewer-<r> <id>`
+  for a reviewer (the job's routed `agents.reviewers`). Pass it as-is. If T3
+  says the provider or model is unavailable, stop that job and tell the
+  user; never switch models.
 - `isolation`: `shared`. The agent starts in the main checkout and works in
   the job's worktree by absolute path; `factory/bin/job` owns the worktrees.
-- `mode`: `async`. `title`: `<id> <role>`, plus ` r<N>` for a builder or reviewer.
+- `mode`: `async`. `title`: `<id> <role>`, plus ` r<N>` for a builder,
+  browser-tester or reviewer.
 - `role`: `research` for intake, `design` for spec-writer, `implementation`
-  for the builder, `review` for reviewers and the approver.
+  for the builder, `test` for browser-tester, `review` for reviewers and the
+  approver.
 - `task`: `<header>`, then
   `You are the factory's <role> agent. Read <repo>/.claude/agents/<role>.md in full and follow it exactly. Ignore its YAML frontmatter.`,
   then the step's own lines below.
@@ -105,15 +112,14 @@ Job: <id>. Job folder: <repo>/factory/jobs/<id>/. Main checkout: <repo>. Worktre
 `<header>` below means that line. Keep `Job folder: <path>/` exactly as shown:
 the job's cost is found by that string.
 
-Agents that open pages get ports. With `n` the job number (`004` → 4), the
-builder gets `5100 + 10n`, `reviewer-ux` `5101 + 10n` and `reviewer-ui`
-`5102 + 10n` (`ports` in `config.json`).
+The builder and browser-tester share the job port, `ports.base + ports.step * n`
+with `n` the job number (`004` → 4). The default is `5100 + 10n`.
 
 Every build round is a new `builder` child. It carries no memory from the last
 round: its task says which round it builds and what the round is for, and it
 reads `build.md`, `git log` and the round files to pick up where the last one
-stopped. Every reviewer and approver run is a new child too; never send a
-finished child a follow-up message.
+stopped. Every browser-tester, reviewer and approver run is a new child too.
+Never send a finished child a follow-up message.
 
 The agent files can't enforce tool limits under T3: the task tells each agent
 which files it may write, and the scripts refuse illegal state changes.
@@ -152,8 +158,8 @@ spawn.
 
 **build.** Spawn a `builder` with
 `Build round <N>. Port: <port>.` plus what this round is for: the
-gate's `round-<N-1>/checks.md`, the reviews in `round-<N-1>/`, or
-`feedback-<k>.md`. Every builder task ends with
+gate's `round-<N-1>/checks.md`, a browser FAIL in `round-<N-1>/browser.md`,
+the reviews in `round-<N-1>/`, or `feedback-<k>.md`. Every builder task ends with
 `Before you reply, run the checks as your instructions say; reply READY only when they pass.`
 When it returns, read `build.md`'s first line:
 
@@ -165,19 +171,47 @@ When it returns, read `build.md`'s first line:
 
 **gate.** Run `factory/bin/gate <id>`. It prints `GATE: PASS` or `GATE: FAIL`.
 
-- On `GATE: PASS`, read `round_kind` in `job.json`. For `bot-fix`, run
-  `factory/bin/job advance <id> approve` and go to **bot reviews**. Otherwise,
-  run `factory/bin/job advance <id> review` and go to **review**.
+- On `GATE: PASS`, run `factory/bin/job sync <id>` and read `browser_needed`
+  and `round_kind` in `job.json`. When `browser_needed` is true, run
+  `factory/bin/job advance <id> browser` and go to **browser**. On a refusal
+  starting `browser busy:`, leave the job in `gate` and retry the advance
+  when the named job leaves `browser`.
+- When `browser_needed` is false on `GATE: PASS`, advance a `bot-fix` round
+  with `factory/bin/job advance <id> approve` and go to **bot reviews**.
+  For a normal round run `factory/bin/job advance <id> review` and go to
+  **review**.
 - FAIL: `factory/bin/job advance <id> build`. If it refuses because this was the
   last round, `factory/bin/job advance <id> needs-human` instead. Otherwise the
   next round keeps the same `round_kind`. Spawn its builder with
   `The gate failed: read round-<N-1>/checks.md and checks.log, fix it, push, and update build.md.`
   No reviewer runs on a failing build.
 
+**browser.** On resume, use an existing `round-<N>/browser.md` for HEAD
+or adopt the running child. Otherwise spawn `browser-tester` with `<header>`,
+the standard agent instruction line and `Browser round <N>. Port: <builder port>.`
+Use `factory/bin/route --target browser-tester`, delegate role `test` and
+title `<id> browser-tester r<N>`. When the result is ready, read the first
+line of `round-<N>/browser.md`:
+
+- `BROWSER: PASS`: for a normal round run
+  `factory/bin/job advance <id> review` and go to **review**. For a
+  `bot-fix` round run `factory/bin/job advance <id> approve` and go to
+  **bot reviews**.
+- `BROWSER: FAIL`: run `factory/bin/job advance <id> build`. If it refuses
+  because this was the last round, run `factory/bin/job advance <id> needs-human`.
+  Otherwise the next round keeps its kind. Spawn the builder with
+  `The browser test failed: read round-<N-1>/browser.md and its screenshots, fix it, push, and update build.md.`
+- `BROWSER: BLOCKED`: run `factory/bin/job advance <id> needs-human` and
+  tell the user what stopped the test from `## Blocked`.
+
+Only one job can be in `browser` at a time. Each time a job leaves it,
+retry `factory/bin/job advance <id> browser` for jobs held as `browser busy`
+and start the browser step for the job that gets the slot.
+
 **review.** Spawn every reviewer in `job.json` `agents.reviewers` **in one
 message**, so they run in parallel: role `reviewer-<r>`, target from
 `factory/bin/route --target reviewer-<r> <id>`, task lines `Review round <N>.`
-plus the port for `ux` and `ui`. **WAIT FOR ALL.** Each time one finishes, run
+**WAIT FOR ALL.** Each time one finishes, run
 `factory/bin/job sync <id>` so the dashboard fills in. When every reviewer has
 finished:
 
@@ -198,8 +232,8 @@ pings any bot that hasn't reviewed this commit, and writes
 - PASS: spawn `approver` with `<header> PR: #<pr>. Final round: <N>.`
 - FAIL (unresolved threads): `factory/bin/job advance <id> build` (or
   `needs-human` when it refuses because this was the last round). Advancing
-  to `build` starts a `bot-fix` round. Its passing **gate** leads directly to
-  **bot reviews**. Spawn a builder for round <N>:
+  to `build` starts a `bot-fix` round. The passing **gate** and **browser**
+  (when needed) lead to **bot reviews**. Spawn a builder for round <N>:
   `Review threads are unresolved: read round-<N-1>/reviews.md, fix or answer and resolve every thread, push, and update build.md for round <N>.`
 - TIMEOUT (a bot never reviewed this commit):
   `factory/bin/job advance <id> needs-human` and tell the user which bot.

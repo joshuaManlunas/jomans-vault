@@ -51,7 +51,7 @@
 
   /* Board */
   .board {
-    display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px;
+    display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 12px;
     padding: 20px 32px 40px; align-items: start;
   }
   .col { min-width: 0; }
@@ -114,7 +114,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .rounds { margin-top: 10px; display: grid; gap: 5px; }
-  .round { display: flex; align-items: center; gap: 4px; }
+  .round { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
   .round .r { font-family: var(--mono); font-size: 10px; color: var(--faint); width: 20px; }
   .chip {
     flex: 1; text-align: center; font-family: var(--mono); font-size: 10px;
@@ -130,7 +130,7 @@
     background: color-mix(in srgb, var(--changes) 16%, transparent);
   }
   .chip.github.FAIL { color: var(--changes); background: color-mix(in srgb, var(--changes) 16%, transparent); }
-  .chip.TIMEOUT { border: 1px solid transparent; color: var(--human); background: color-mix(in srgb, var(--human) 16%, transparent); }
+  .chip.TIMEOUT, .chip.BLOCKED { border: 1px solid transparent; color: var(--human); background: color-mix(in srgb, var(--human) 16%, transparent); }
   .chip.bad { border: 1px solid var(--human); color: var(--human); }
   .hint {
     margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line);
@@ -293,13 +293,14 @@ const COLUMNS = [
   { label: 'Intake', who: 'intake · fable', stages: ['intake', 'needs-info'] },
   { label: 'Spec', who: 'spec-writer · opus', stages: ['spec'] },
   { label: 'Build', who: 'builder · gate', stages: ['build', 'gate'] },
+  { label: 'Browser', who: 'browser-tester · terra', stages: ['browser'] },
   { label: 'Review', who: 'routed reviewers', stages: ['review'] },
   { label: 'Approve', who: 'approver · merge', stages: ['approve', 'merging'] },
   { label: 'Waiting', who: 'needs-human · split children', stages: ['needs-human', 'split'], cls: 'human' },
   { label: 'Done', who: 'merged · rejected', stages: ['merged', 'rejected'], cls: 'merged-col' },
 ]
 const STAGES = new Set(COLUMNS.flatMap((c) => c.stages))
-const LIVE = new Set(['intake', 'spec', 'build', 'gate', 'review', 'approve', 'merging'])
+const LIVE = new Set(['intake', 'spec', 'build', 'gate', 'browser', 'review', 'approve', 'merging'])
 const SHORT = { code: 'code', ux: 'ux', ui: 'ui', security: 'sec' }
 
 const $ = (id) => document.getElementById(id)
@@ -330,41 +331,48 @@ async function fetchFirst(url) {
 
 function verdictOf(line) {
   if (line === null) return 'pending'
-  const m = line.match(/^(?:VERDICT|GATE|REVIEWS):\s*(PASS|CHANGES|FAIL|TIMEOUT)$/)
+  const m = line.match(/^(?:VERDICT|GATE|REVIEWS|BROWSER):\s*(PASS|CHANGES|FAIL|TIMEOUT|BLOCKED)$/)
   return m ? m[1] : 'invalid'
 }
 
-// A round's verdicts come from its gate, bot review and internal review files.
+// Read evidence from each round, including ones that predate the browser stage.
 async function roundVerdicts(job, n) {
   const key = `${job.id}/${n}`
   if (roundCache.has(key)) return roundCache.get(key)
   const dir = `jobs/${job.id}/round-${n}/`
   const botFix = job.round_kinds?.[String(n)] === 'bot-fix' || (n === job.round && job.round_kind === 'bot-fix')
   const v = { gate: verdictOf(await fetchFirst(dir + 'checks.md')), github: verdictOf(await fetchFirst(dir + 'reviews.md')), reviews: {}, botFix }
-  if (v.gate === 'PASS' && !botFix) {
+  const browser = await fetchFirst(dir + 'browser.md')
+  v.browser = browser !== null ? verdictOf(browser) : n === job.round ? job.browser ?? null : null
+  if (v.browser === null && n === job.round && job.browser_needed && v.gate === 'PASS') v.browser = 'pending'
+  const readyForReview = v.gate === 'PASS' && (v.browser === null || v.browser === 'PASS')
+  if (readyForReview && !botFix) {
     await Promise.all(Object.keys(job.agents?.reviewers || {}).map(async (r) => {
       v.reviews[r] = verdictOf(await fetchFirst(`${dir}review-${r}.md`))
     }))
   }
   const reviewed = botFix ? ['PASS', 'FAIL', 'TIMEOUT'].includes(v.github)
     : Object.values(v.reviews).every((x) => x === 'PASS' || x === 'CHANGES')
-  const settled = v.gate === 'FAIL' || (v.gate === 'PASS' && reviewed)
+  const settled = v.gate === 'FAIL' || v.browser === 'FAIL' || v.browser === 'BLOCKED' || (readyForReview && reviewed)
   if (settled && n < job.round) roundCache.set(key, v)
   return v
 }
 
 function chip(label, v, waiting, title, extra = '') {
-  const cls = ['PASS', 'CHANGES', 'FAIL', 'TIMEOUT'].includes(v) ? v : v === 'pending' ? (waiting ? 'wait' : '') : 'bad'
+  const cls = ['PASS', 'CHANGES', 'FAIL', 'TIMEOUT', 'BLOCKED'].includes(v) ? v : v === 'pending' ? (waiting ? 'wait' : '') : 'bad'
   return `<span class="chip ${extra} ${cls}" title="${esc(title)}: ${esc(v)}">${esc(label)}</span>`
 }
 
 function roundRow(job, n, v) {
   const current = n === job.round
   const cells = [chip('gate', v.gate, current && job.stage === 'gate', 'gate', 'gate')]
+  if (v.browser != null) {
+    cells.push(chip('browser', v.browser, current && job.stage === 'browser', 'browser'))
+  }
   if (v.botFix) {
     cells.push('<span class="chip" title="Bot-fix round">bot-fix</span>')
-  } else if (v.gate === 'PASS') {
-    for (const r of Object.keys(job.agents.reviewers)) {
+  } else if (v.gate === 'PASS' && (v.browser == null || v.browser === 'PASS')) {
+    for (const r of Object.keys(job.agents?.reviewers || {})) {
       cells.push(chip(SHORT[r] || r, v.reviews[r], current && job.stage === 'review', r))
     }
   }
@@ -532,7 +540,7 @@ async function listFiles(dir) {
 }
 
 const ORDER = ['issue.md', 'intake.md', 'spec.md', 'build.md', 'decision.md', 'rejection.md']
-const ROUND_ORDER = ['checks', 'review-code', 'review-security', 'review-ux', 'review-ui', 'reviews', 'merge-checks']
+const ROUND_ORDER = ['checks', 'browser', 'review-code', 'review-security', 'review-ux', 'review-ui', 'reviews', 'merge-checks']
 
 function fileRank(path) {
   if (ORDER.includes(path)) return [0, ORDER.indexOf(path), path]
@@ -549,9 +557,9 @@ function sortFiles(files) {
 }
 
 function tone(first) {
-  if (/^(VERDICT:\s*PASS|GATE:\s*PASS|REVIEWS:\s*PASS|APPROVE|STATUS:\s*READY|DECISION:\s*ACCEPT)$/.test(first)) return 'good'
+  if (/^(VERDICT:\s*PASS|GATE:\s*PASS|REVIEWS:\s*PASS|BROWSER:\s*PASS|APPROVE|STATUS:\s*READY|DECISION:\s*ACCEPT)$/.test(first)) return 'good'
   if (/^(VERDICT:\s*CHANGES|REVIEWS:\s*FAIL|DECISION:\s*(NEEDS-INFO|SPLIT))$/.test(first)) return 'warn'
-  if (/^(ESCALATE|REJECTED|STATUS:\s*BLOCKED|GATE:\s*FAIL|REVIEWS:\s*TIMEOUT|DECISION:\s*REJECT)$/.test(first)) return 'stop'
+  if (/^(ESCALATE|REJECTED|STATUS:\s*BLOCKED|GATE:\s*FAIL|REVIEWS:\s*TIMEOUT|BROWSER:\s*(FAIL|BLOCKED)|DECISION:\s*REJECT)$/.test(first)) return 'stop'
   return null
 }
 

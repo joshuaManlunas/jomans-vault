@@ -16,7 +16,7 @@ Usage:
   job feedback <job>             needs-human → intake (split) or build, with feedback (stdin) as feedback-<k>.md
   job reject <job>               needs-info, needs-human or split → rejected, with your reason (stdin) as rejection.md
   job agents <job> <json>        record the routed agent set (called by factory/bin/route)
-  job sync <job>                 refresh reviews, gate and cost from the job's files
+  job sync <job>                 refresh reviews, gate, browser and cost from the job's files
   job summary [<job>...]         table of jobs: issue, stage, PR, cost, time
 
 <job> is a job id (004-dark-mode) or an issue number (12).
@@ -28,6 +28,7 @@ from importlib.machinery import SourceFileLoader
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -53,7 +54,8 @@ TRANSITIONS = {
     "needs-info": {"intake", "rejected"},
     "spec": {"build"},
     "build": {"gate", "needs-human"},
-    "gate": {"review", "approve", "build", "needs-human"},
+    "gate": {"browser", "review", "approve", "build", "needs-human"},
+    "browser": {"review", "approve", "build", "needs-human"},
     "review": {"approve", "build", "needs-human"},
     "approve": {"merging", "build", "needs-human"},
     "merging": {"needs-human"},
@@ -537,6 +539,33 @@ def cost_usd(job, rollouts=None):
 # ---- Sync: fields derived from files ---------------------------------------
 
 
+def browser_verdict(path):
+    match = re.fullmatch(r"BROWSER: (PASS|FAIL|BLOCKED)", first_line(path) or "")
+    return match.group(1) if match else None
+
+
+def needs_browser(job):
+    browser = CONFIG.get("browser")
+    surfaces = (job.get("intake") or {}).get("surfaces", [])
+    if not isinstance(browser, dict) or not set(surfaces).intersection(browser.get("surfaces", ["ui"])):
+        return False
+    if "browser-tester" not in CONFIG.get("roles", {}):
+        return False  # A config from before the browser stage, kept by `install.sh --update`.
+    if job["round_kind"] != "bot-fix":
+        return True
+    for n in range(job["round"] - 1, 0, -1):
+        evidence = job_dir(job["id"]) / f"round-{n}" / "browser.md"
+        if browser_verdict(evidence) == "PASS":
+            if Path(job["worktree"]).is_dir():
+                head = git(job, "rev-parse", "HEAD").stdout.strip()
+            else:
+                # Finished jobs no longer have a worktree. Use the gated commit.
+                checks = round_dir(job) / "checks.md"
+                head = header(checks).get("COMMIT") if checks.exists() else None
+            return not head or head != header(evidence).get("COMMIT")
+    return True
+
+
 def sync(job, rollouts=None):
     d = job_dir(job["id"])
     verdict = first_line(round_dir(job) / "reviews.md") if job["round"] else None
@@ -552,8 +581,14 @@ def sync(job, rollouts=None):
             "surfaces": [s.strip() for s in h.get("SURFACES", "").split(",")
                          if s.strip() and s.strip() != "none"],
         }
+    job["browser_needed"] = needs_browser(job)
+    job["browser"] = None
     if job["round"]:
         rd = round_dir(job)
+        if job["browser_needed"] or job["stage"] == "browser":
+            job["browser"] = browser_verdict(rd / "browser.md")
+            if job["browser"] is None and job["stage"] == "browser":
+                job["browser"] = "pending"
         gate = header(rd / "checks.md").get("GATE") if (rd / "checks.md").exists() else None
         job["gate"] = gate
         bot_fix = job["round_kind"] == "bot-fix"
@@ -586,6 +621,30 @@ def escalate(job, why):
 
 def git(job, *args, check=True):
     return run(["git", *args], cwd=job["worktree"], check=check)
+
+
+def copy_env_files(job):
+    worktree = Path(job["worktree"]).resolve()
+    for name in CONFIG.get("env_files", []):
+        path = Path(name)
+        source, dest = REPO / path, worktree / path
+        if (path.is_absolute() or ".." in path.parts or not source.resolve().is_relative_to(REPO)
+                or dest.resolve() != dest):
+            print(f"job: warning: skipping env file {name!r}; unsafe path", file=sys.stderr)
+            continue
+        if not source.is_file():
+            continue
+        # The ./ prefix keeps a leading colon from being parsed as pathspec magic.
+        if git(job, "check-ignore", "-q", "--", f"./{path}", check=False).returncode != 0:
+            print(f"job: warning: skipping env file {name!r}; git does not ignore it", file=sys.stderr)
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=worktree.parent) as staging:
+            temp = Path(staging) / "env"
+            with source.open("rb") as src, temp.open("xb") as out:
+                os.fchmod(out.fileno(), 0o600)
+                shutil.copyfileobj(src, out)
+            temp.replace(dest)
 
 
 def pr_state(job):
@@ -705,6 +764,8 @@ def next_round(job, kind="normal"):
     job["round_kinds"][str(job["round"])] = kind
     round_dir(job).mkdir(exist_ok=True)
     job["gate"] = None
+    job["browser_needed"] = needs_browser(job)
+    job["browser"] = None
     job["reviews"] = {}
     job["reviews_gate"] = None
 
@@ -773,6 +834,12 @@ def advance(job, stage, *, splitting=False):
             run(["git", "fetch", "origin", BASE])
             Path(job["worktree"]).parent.mkdir(parents=True, exist_ok=True)
             run(["git", "worktree", "add", "-b", job["branch"], job["worktree"], f"origin/{BASE}"])
+            try:
+                copy_env_files(job)
+            except OSError as exc:
+                run(["git", "worktree", "remove", "--force", job["worktree"]])
+                run(["git", "branch", "-D", job["branch"]])
+                raise Refused(f"could not copy env files: {exc}") from exc
 
     elif old == "needs-info" or (old == "needs-human" and stage == "intake"):
         if old == "needs-human":
@@ -820,8 +887,15 @@ def advance(job, stage, *, splitting=False):
         h = header(checks)
         require(h.get("COMMIT") == git(job, "rev-parse", "HEAD").stdout.strip(),
                 "checks.md was written for another commit; run the gate again")
-        if stage in {"review", "approve"}:
+        if stage in {"browser", "review", "approve"}:
             require(h.get("GATE") == "PASS", "the gate didn't pass")
+            if stage == "browser":
+                require(job["browser_needed"], "the browser stage isn't needed")
+                lock_slots()
+                busy = [j["id"] for j in all_jobs() if j["id"] != job["id"] and j["stage"] == "browser"]
+                require(not busy, f"browser busy: {', '.join(busy)}")
+            else:
+                require(not job["browser_needed"], f"run the browser stage first: job advance {job['id']} browser")
         else:
             require(h.get("GATE") == "FAIL", "the gate passed")
             last = job["round"] >= job["round_limit"]
@@ -830,6 +904,31 @@ def advance(job, stage, *, splitting=False):
             if last:
                 escalate(job, f"The gate failed in round {job['round']}, the last allowed round. "
                               f"See round-{job['round']}/checks.md.")
+            else:
+                next_round(job, job["round_kind"])
+
+    elif old == "browser":
+        evidence = round_dir(job) / "browser.md"
+        require(evidence.exists(), "missing browser.md; run the browser test first")
+        require(header(evidence).get("COMMIT") == git(job, "rev-parse", "HEAD").stdout.strip(),
+                "browser.md was written for another commit; run the browser test again")
+        verdict = browser_verdict(evidence)
+        if stage in {"review", "approve"}:
+            bot_fix = job["round_kind"] == "bot-fix"
+            require(bot_fix == (stage == "approve"), "only bot-fix rounds can advance from browser to approve"
+                    if stage == "approve" else "bot-fix rounds must advance from browser to approve")
+            require(verdict == "PASS", "the browser test didn't pass")
+        elif stage == "needs-human" and verdict == "BLOCKED":
+            escalate(job, "The browser test is blocked:\n\n" + (section(evidence, "Blocked") or "(no Blocked section)"))
+        else:
+            require(verdict == "FAIL", "browser.md must start with BROWSER: FAIL" if stage == "build"
+                    else "browser.md must start with BROWSER: FAIL or BROWSER: BLOCKED")
+            last = job["round"] >= job["round_limit"]
+            require(last == (stage == "needs-human"),
+                    f"round {job['round']} of {job['round_limit']}: go to {'needs-human' if last else 'build'}")
+            if last:
+                escalate(job, f"The browser test failed in round {job['round']}, the last allowed round. "
+                              f"See round-{job['round']}/browser.md.")
             else:
                 next_round(job, job["round_kind"])
 
@@ -937,6 +1036,7 @@ def cmd_create(number):
         "stage": "intake", "round": 0, "round_limit": CONFIG["max_rounds"],
         "round_kind": "normal", "round_kinds": {},
         "intake": None, "agents": None, "gate": None, "reviews": {}, "reviews_gate": None,
+        "browser_needed": False, "browser": None,
         "cost_usd": 0.0, "started": now(), "ended": None,
     }
     write_issue_md(job)

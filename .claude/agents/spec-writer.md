@@ -32,6 +32,8 @@ in the main checkout; your one file goes there.
    which seams they test through.
 5. When `issue.md` says `Part of #<n>`, this job is one child of a split issue.
    Its siblings build on, or are built on, what this job exposes.
+6. The `browser` settings in `<main checkout>/factory/config.json`. Compare
+   `browser.surfaces` (default `["ui"]`) with intake's `SURFACES`.
 
 ## Write spec.md
 
@@ -74,6 +76,18 @@ Numbered list. Each criterion is one observable behaviour plus how to verify it:
 a command to run, a page and what it should show, or a file that should contain
 something. The builder tests against this list and the approver checks it, so
 every item must be checkable by someone who only has the repo.
+
+## Browser script
+Include this section when intake's surfaces match `browser.surfaces` on an
+enabled browser configuration. Number the steps in execution order. For each
+step, give the URL path, exactly what to click or type by visible label, the
+expected visible result, and the acceptance criterion it proves (for example
+`AC1`). Use results a tester can check without judgment.
+
+Put setup first, including signing in with the review account and creating
+any required test data through the UI. List signed-out checks under a
+separate `### Signed-out checks` heading. Include how to reach a signed-out
+state when an earlier step signed in.
 
 ## Out of scope
 What a reasonable builder might be tempted to do but must not, including

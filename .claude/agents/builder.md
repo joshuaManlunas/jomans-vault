@@ -26,14 +26,17 @@ other jobs.
    plan. `issue.md` and `intake.md` are background; the spec is what you build.
 3. When a round's gate failed, `round-<N>/checks.md` and `checks.log` in the
    job folder: the failing output of `factory/checks.sh`.
-4. When reviews asked for changes, every `review-*.md` in the round folder the
+4. When this round started after a browser FAIL, read
+   `<job folder>/round-<N-1>/browser.md` and its screenshots. Fix the failed
+   steps and test the fixes.
+5. When reviews asked for changes, every `review-*.md` in the round folder the
    message names. Address each finding in a `VERDICT: CHANGES` file. Notes in
    `VERDICT: PASS` files are optional.
-5. When review threads are unresolved, `round-<N>/reviews.md` in the job
+6. When review threads are unresolved, `round-<N>/reviews.md` in the job
    folder: every unresolved thread on the PR (a merge request on GitLab), from
    the review bots or a person, with its path, line, comment, URL and thread
    id.
-6. When the prompt names a `feedback-*.md` file, read it: the user's feedback
+7. When the prompt names a `feedback-*.md` file, read it: the user's feedback
    after the job escalated. Read `decision.md` and every round folder too, so
    you know the history. The feedback comes before the reviews and the spec
    where they disagree.
@@ -63,24 +66,11 @@ Run `bash <main checkout>/factory/checks.sh` from the worktree
 the gate runs exactly this after you finish, and reviewers only start once it
 passes.
 
-Then verify every acceptance criterion and record the evidence in build.md: the
-command you ran and its result, or what the page showed.
+Then verify every acceptance criterion with tests. Record each test command
+and its result in build.md. Leave browser testing to the browser stage.
 
 - Never run a command that rewrites files across the repo, such as a lint
   `--fix` over everything.
-- For criteria you can see on a page, start the dev server from AGENTS.md in the
-  worktree on your port. Get the browser and account settings with
-  `<main checkout>/factory/bin/route --browser`. Run `browser.setup` if set,
-  then use `browser.cli` with `--session <job-id>-builder` for every interaction.
-- With `review_account` configured, use both credentials from the environment
-  variables named by `email_env` and `password_env`. Keep their values out of
-  files and logs. If needed, run the configured `seed` command against the
-  job's local data. Sign in as that account and submit test data only on your
-  local server and assigned port. If the account or credentials are absent,
-  stick to signed-out checks without form submissions and list any inaccessible
-  pages in `build.md`.
-- Close the browser session and stop only the server you started on your port.
-  Find its PID with `lsof -tiTCP:<port> -sTCP:LISTEN`.
 
 ## Review threads
 
@@ -147,8 +137,9 @@ The commands you ran and whether each one passed.
 
 ## Log
 ### Round <N>
-What you did this round. On rounds after the first, list each gate failure or
-review finding and what you did about it, or why you didn't change anything.
+What you did this round. On rounds after the first, list each gate or browser
+failure or review finding and what you did about it, or why you didn't change
+anything.
 ```
 
 `## Summary` is 3 to 5 short bullets a human can skim on the dashboard. The

@@ -43,16 +43,32 @@ Already set: `forge`, `base_branch`, `merge_method`, `review_bots.bots`,
 - `escalate.categories`: tailor the list at install time to the changes that
   always need a human decision. `factory/config.json` is a protected path in
   installed repos, so jobs cannot edit it themselves.
-- `browser`: sets the browser CLI (`cli`) and an optional `setup` command to
-  run before it. Choose a CLI that supports named sessions (`--session`) and
-  can close them. Verify the settings with `factory/bin/route --browser`.
-- `review_account`: defaults to `null` for signed-out checks without form
-  submissions. For authenticated review, seed a test account in the job's
+- `browser`: runs the browser stage after the gate for matching intake
+  surfaces (`["ui"]` by default). The browser-tester drives a dedicated window
+  in the system's Google Chrome with Codex computer use and a throwaway
+  profile. Only one job can use the stage at a time. Choose a fallback
+  `cli` that supports and can close named sessions (`--session`). Set its
+  `setup` command if needed. Set `"browser": null` to disable the stage.
+  The stage also stays off until `roles` has a `browser-tester` entry.
+  `install.sh --update` keeps an existing `config.json`, so to enable the
+  stage on an older install, add the `terra` model, the `browser-tester` role
+  and the new `browser` keys from this repo's config by hand.
+- `env_files`: set this to the project's local env files as paths relative
+  to the repo root, for example `["apps/web/.env"]`. Run
+  `git check-ignore -- <path>` for each file and confirm that git ignores it.
+  The factory copies only ignored files from the main checkout into new job
+  worktrees and gives the copies mode `0600`. Leave the list empty when the
+  project needs no env files.
+- `review_account`: defaults to `null` for signed-out checks. For
+  authenticated review, seed a test account in the job's
   local dev database. For example, provide a `db:seed-reviewer` script and set
   `review_account` to `{"email_env": "REVIEW_EMAIL", "password_env": "REVIEW_PASSWORD", "seed": "npm run db:seed-reviewer"}`.
-  Omit `seed` if the account already exists locally. Supply the named
-  variables to the agents and seed script through their environment. Keep
-  credential values out of repo files, `job.json` and review artifacts.
+  Omit `seed` if the account already exists locally. The tester reads each
+  named variable from the process environment first, then the copied
+  `env_files`, and passes it to the local seed command when configured.
+  Keep credential values out of tracked files, `job.json` and review artifacts.
+  Verify the browser, review account and env file settings with
+  `factory/bin/route --browser`.
 
 Leave `models`, `roles`, `routing` and `surface_reviewers` alone unless the
 user asks; `/setup-factory` is how they change them.

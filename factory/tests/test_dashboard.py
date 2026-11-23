@@ -135,6 +135,47 @@ class DashboardTests(unittest.TestCase):
         self.assertIn(f"stopped (pid {pid})", self.run_dashboard("stop"))
 
     @unittest.skipUnless(shutil.which("node"), "needs node to run the page's script")
+    def test_browser_column_and_round_verdicts_render_with_legacy_jobs(self):
+        html = (REPO / "factory/dashboard.html").read_text()
+        columns = re.search(r"^const COLUMNS = .*?^const SHORT = .*?$", html, re.M | re.S).group()
+        src = columns + "\n" + page_functions("verdictOf", "roundVerdicts", "chip", "roundRow") + r"""
+const roundCache = new Map()
+const fetchFirst = async (url) => {
+  if (url.endsWith('/checks.md')) return 'GATE: PASS'
+  if (url.endsWith('/browser.md')) {
+    const verdicts = { passed: 'PASS', failed: 'FAIL', blocked: 'BLOCKED' }
+    const verdict = verdicts[url.split('/')[1]]
+    return verdict ? `BROWSER: ${verdict}` : null
+  }
+  return null
+}
+const row = async (job, n) => roundRow(job, n, await roundVerdicts(job, n))
+async function main() {
+  console.log(JSON.stringify({
+    column: COLUMNS.find((c) => c.stages.includes('browser'))?.label,
+    running: LIVE.has('browser'),
+    passed: await row({ id: 'passed', round: 2, stage: 'build' }, 1),
+    failed: await row({ id: 'failed', round: 2, stage: 'build' }, 1),
+    blocked: await row({ id: 'blocked', round: 1, stage: 'needs-human', browser: 'BLOCKED' }, 1),
+    pending: await row({ id: 'pending', round: 1, stage: 'browser', browser: 'pending', browser_needed: true }, 1),
+    legacy: await row({ id: 'legacy', round: 1, stage: 'review' }, 1)
+  }))
+}
+main()
+"""
+        out = subprocess.run(["node", "-e", src], capture_output=True, text=True, timeout=20)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        board = json.loads(out.stdout)
+        self.assertEqual(board["column"], "Browser")
+        self.assertTrue(board["running"])
+        for key, verdict in (("passed", "PASS"), ("failed", "FAIL"), ("blocked", "BLOCKED"), ("pending", "pending")):
+            with self.subTest(verdict=verdict):
+                row = board[key]
+                self.assertIn(f'title="browser: {verdict}">browser', row)
+                self.assertLess(row.index('title="gate: PASS"'), row.index('title="browser:'))
+        self.assertNotIn('title="browser:', board["legacy"])
+
+    @unittest.skipUnless(shutil.which("node"), "needs node to run the page's script")
     def test_an_unreadable_job_is_reported_and_clears_once_repaired(self):
         # A broken job.json used to vanish from the board with a healthy status line.
         jobs = self.factory / "jobs"
