@@ -12,14 +12,14 @@ records the result in job.json with `job agents`. Prints the agent set.
 
 `route --target <role> [<job-id>]` prints the T3 `delegate_task` target for one
 agent as JSON: {"providerInstanceId", "model", "options"}. Fixed roles (intake,
-spec-writer, builder, approver) come from config.json `roles`; a reviewer
+spec-writer, builder, browser-tester, approver) come from config.json `roles`; a reviewer
 (`reviewer-<r>`) comes from the job's routed `agents.reviewers`, so it needs the
 job id. Every name resolves through config.json `models`.
 
 `route --escalate` prints the configured escalation categories as JSON
 (`{"categories": []}` when config.json has no `escalate` key).
 
-`route --browser` prints the `browser` and `review_account` settings as JSON.
+`route --browser` prints `browser`, `review_account`, and `env_files` as JSON.
 """
 
 from contextlib import contextmanager
@@ -74,7 +74,8 @@ def main(argv):
         print(json.dumps(CONFIG.get("escalate", {"categories": []})))
         return
     if argv == ["--browser"]:
-        print(json.dumps({"browser": CONFIG.get("browser"), "review_account": CONFIG.get("review_account")}))
+        print(json.dumps({"browser": CONFIG.get("browser"), "review_account": CONFIG.get("review_account"),
+                          "env_files": CONFIG.get("env_files", [])}))
         return
     if argv[:1] == ["--target"] and len(argv) in (2, 3):
         print(json.dumps(target(*argv[1:])))

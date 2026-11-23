@@ -43,19 +43,55 @@ Already set: `forge`, `base_branch`, `merge_method`, `review_bots.bots`,
 - `escalate.categories`: tailor the list at install time to the changes that
   always need a human decision. `factory/config.json` is a protected path in
   installed repos, so jobs cannot edit it themselves.
-- `browser`: sets the browser CLI (`cli`) and an optional `setup` command to
-  run before it. Choose a CLI that supports named sessions (`--session`) and
-  can close them. Verify the settings with `factory/bin/route --browser`.
-- `review_account`: defaults to `null` for signed-out checks without form
-  submissions. For authenticated review, seed a test account in the job's
+- `browser`: runs the browser stage after the gate for matching intake
+  surfaces (`["ui"]` by default). The browser-tester drives a dedicated window
+  in the system's Google Chrome with Codex computer use and a throwaway
+  profile. Only one job can use the stage at a time. Choose a fallback `cli`
+  that can resize its viewport and open and close named sessions (`--session`).
+  Set its `setup` command if needed. Set `"browser": null` to disable the stage.
+  The stage also stays off until `roles` has a `browser-tester` entry.
+- `browser.server_env`: map environment variable names to value templates.
+  Set it for any framework whose auth or base URL must match the page origin.
+  For example, `{"BETTER_AUTH_URL": "http://127.0.0.1:{port}"}` aligns Better
+  Auth with the job's browser origin. The tester replaces `{port}` with the
+  job port and passes the values to both the dev server and the seed command.
+  These values override settings in the copied env files.
+- `env_files`: set this to the project's local env files as paths relative
+  to the repo root, for example `["apps/web/.env"]`. Run
+  `git check-ignore -- <path>` for each file and confirm that git ignores it.
+  The factory copies only ignored files from the main checkout into new job
+  worktrees and gives the copies mode `0600`. Leave the list empty when the
+  project needs no env files.
+- `review_account`: defaults to `null` for signed-out checks. For
+  authenticated review, seed a test account in the job's
   local dev database. For example, provide a `db:seed-reviewer` script and set
   `review_account` to `{"email_env": "REVIEW_EMAIL", "password_env": "REVIEW_PASSWORD", "seed": "npm run db:seed-reviewer"}`.
-  Omit `seed` if the account already exists locally. Supply the named
-  variables to the agents and seed script through their environment. Keep
-  credential values out of repo files, `job.json` and review artifacts.
+  Omit `seed` if the account already exists locally. The tester reads each
+  named variable from the process environment first, then the copied
+  `env_files`, and passes it to the local seed command when configured.
+  Keep credential values out of tracked files, `job.json` and review artifacts.
+  Verify the browser, review account and env file settings with
+  `factory/bin/route --browser`.
 
-Leave `models`, `roles`, `routing` and `surface_reviewers` alone unless the
-user asks; `/setup-factory` is how they change them.
+To enable the browser stage on an older install after `install.sh --update`:
+
+1. Merge the new `spec-writer.md`, `builder.md`, `reviewer-ui.md`,
+   `reviewer-ux.md` and `approver.md` into the project's `.claude/agents/`
+   copies. Keep the project's text. The update installs `browser-tester.md`
+   if it is missing. If the project already has a copy, merge the new
+   instructions into it too.
+2. In `factory/config.json`, add `models.terra`, `roles.browser-tester` and
+   `prices_usd_per_mtok.gpt-6.1-terra` from the source config. Add the
+   `browser` keys `surfaces`, `computer_use`, `chrome_app` and `server_env`
+   and set `env_files` for the project. The update adds missing top-level
+   keys and preserves existing nested settings.
+3. Run `factory/bin/doctor` and `factory/bin/route --browser`. Confirm that
+   preflight passes and the command prints the intended browser settings,
+   review account configuration and env file paths.
+
+Outside this upgrade, leave `models`, `roles`, `routing` and
+`surface_reviewers` alone unless the user asks. Use `/setup-factory` to change
+them.
 
 For installs upgraded from a Claude-only price table, add the Codex entries
 from the source `factory/config.json` to `prices_usd_per_mtok`. The installer

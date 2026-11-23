@@ -89,16 +89,43 @@ def job_ports(config):
     return "PASS", f"{len(ports)} ports free for the next {slots} job slots"
 
 
+def chrome_available(app):
+    if sys.platform != "darwin":
+        return bool(shutil.which("google-chrome") or shutil.which("chromium"))
+    if (Path("/Applications") / f"{app}.app").is_dir():
+        return True
+    opener = shutil.which("open")
+    if not opener:
+        return False
+    try:
+        return subprocess.run([opener, "-Ra", app], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
 def browser_cli(config):
     browser = config.get("browser", {})
-    cli = (browser or {}).get("cli", "agent-browser")
-    if browser is None or browser is False or not cli:
+    if browser is None or browser is False:
         return "SKIP", "disabled"
-    if shutil.which(cli):
-        return "PASS", f"{cli} is on PATH"
+    cli = browser.get("cli", "agent-browser")
+    computer_use = browser.get("computer_use", False)
     setup = browser.get("setup")
-    hint = f"Follow browser.setup: {setup}" if setup else f"Install {cli} and add it to PATH."
-    return "FAIL", f"{cli} is missing from PATH. {hint}"
+    cli_found = bool(cli and shutil.which(cli))
+    if not cli:
+        fallback = "fallback CLI is disabled"
+    elif cli_found:
+        fallback = f"{cli} is on PATH"
+    else:
+        hint = f"Follow browser.setup: {setup}" if setup else f"Install {cli} and add it to PATH."
+        fallback = f"{cli} is missing from PATH. {hint}"
+    if computer_use:
+        app = browser.get("chrome_app", "Google Chrome")
+        if chrome_available(app):
+            return "PASS", f"{app} is available for computer use. Fallback: {fallback}"
+        return ("PASS" if cli_found else "FAIL"), f"{app} is unavailable for computer use. Fallback: {fallback}"
+    if not cli:
+        return "SKIP", "disabled"
+    return ("PASS" if cli_found else "FAIL"), fallback
 
 
 def checkout_conflicts(_config):

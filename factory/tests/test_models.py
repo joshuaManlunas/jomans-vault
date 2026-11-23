@@ -136,6 +136,18 @@ class ModelsTests(unittest.TestCase):
         self.assertEqual(self.run_bin("models", "show").stdout, default)
         self.assertNotIn("astra", self.config()["models"])
 
+    def test_reset_restores_browser_tester_to_terra(self):
+        config = self.config()
+        config["roles"]["browser-tester"] = "sol"
+        (self.factory / "config.json").write_text(json.dumps(config))
+        res = self.run_bin("models", "reset")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        config = self.config()
+        self.assertEqual(config["roles"]["browser-tester"], "terra")
+        self.assertEqual(config["models"]["terra"], {
+            "provider": "codex", "model": "gpt-6.1-terra", "options": {"reasoningEffort": "xhigh"},
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

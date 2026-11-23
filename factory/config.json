@@ -50,6 +50,13 @@
         "reasoningEffort": "high"
       }
     },
+    "terra": {
+      "provider": "codex",
+      "model": "gpt-6.1-terra",
+      "options": {
+        "reasoningEffort": "xhigh"
+      }
+    },
     "daybreak-blue": {
       "provider": "codex",
       "model": "gpt-daybreak-blue-latest",
@@ -63,6 +70,7 @@
     "intake": "fable",
     "spec-writer": "opus",
     "builder": "sol",
+    "browser-tester": "terra",
     "approver": "opus"
   },
   "routing": {
@@ -108,14 +116,25 @@
     "step": 10
   },
   "browser": {
+    "surfaces": [
+      "ui"
+    ],
+    "computer_use": true,
+    "chrome_app": "Google Chrome",
     "cli": "playwright-cli",
-    "setup": "playwright-cli --help"
+    "setup": "playwright-cli --help",
+    "server_env": {
+      "BETTER_AUTH_URL": "http://127.0.0.1:{port}"
+    }
   },
   "review_account": {
     "email_env": "FACTORY_REVIEW_EMAIL",
     "password_env": "FACTORY_REVIEW_PASSWORD",
     "seed": "bun run db:seed-reviewer"
   },
+  "env_files": [
+    "apps/web/.env"
+  ],
   "dashboard": {
     "port": 8000,
     "open": true
@@ -161,6 +180,12 @@
       "output": 10.0,
       "cache_read": 0.1,
       "cache_write_30m": 2.5
+    },
+    "gpt-6.1-terra": {
+      "input": 1.0,
+      "output": 5.0,
+      "cache_read": 0.05,
+      "cache_write_30m": 1.25
     },
     "gpt-daybreak-blue-latest": {
       "input": 4.0,

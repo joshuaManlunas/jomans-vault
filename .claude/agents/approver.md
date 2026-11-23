@@ -31,13 +31,17 @@ one file goes there.
    `round-*/` folder (`checks.md`, the reviews, and `reviews.md`: the review
    bots' verdict on the current commit).
 3. The change: `git log --oneline <base>..HEAD` and `git diff <base>...HEAD`.
+4. `<job folder>/round-<N>/browser.md` from the most recent round that ran the
+   browser stage, when it exists. Match its `COMMIT:` to HEAD.
 
 ## Decide
 
 APPROVE only if all of these hold:
 
-- Every acceptance criterion in the spec is met, with evidence in build.md that
-  you find convincing. Spot-check at least one criterion yourself.
+- Every acceptance criterion in the spec is met, with convincing evidence
+  from build.md or a `BROWSER: PASS` for HEAD that covers it. Spot-check at
+  least one criterion yourself. List any criterion nobody verified live
+  under `## Notes`.
 - The final round's `checks.md` says `GATE: PASS`. In the most recent round
   with internal reviews (`review-*.md`), every review says `VERDICT: PASS`
   and no Note describes a real problem.
@@ -75,7 +79,8 @@ Two or three sentences.
 
 ## Notes
 Include when approving a sensitive change outside the configured escalation
-categories. List what you checked in that area.
+categories. List what you checked in that area. List any acceptance criterion
+nobody verified live.
 
 ## For the human
 Only when you escalate: the exact decision or check you need from them, and the

@@ -40,10 +40,10 @@ pipeline. Two kinds of worker split the work:
   exactly to build, the code, and whether the result is good.
 
 Every step leaves a file behind, so you can see what happened and why. Each
-agent's file opens with a machine-readable first line (`DECISION: ACCEPT`,
-`STATUS: READY`, `VERDICT: PASS`, `APPROVE`) and a `## Summary` of three to five
-bullets for a human. The orchestrator reads only first lines, which keeps its
-context small enough to run many jobs.
+agent's report opens with a machine-readable first line (`DECISION: ACCEPT`,
+`STATUS: READY`, `BROWSER: PASS`, `VERDICT: PASS`, `APPROVE`) and a
+`## Summary` for a human. The orchestrator reads verdicts from the first
+lines, which keeps its context small enough to run many jobs.
 
 ## Pieces
 
@@ -51,9 +51,9 @@ context small enough to run many jobs.
 |---|---|---|
 | Queue | Issues labeled `factory` on the repo's forge (GitHub or GitLab) | What to build. Only people with triage or write access can label, so the label is the trust boundary. |
 | Orchestrator | `.claude/skills/factory/SKILL.md` | The session running `/factory`. Starts jobs, spawns agents as T3 children, calls the scripts. Writes no code, specs or reviews, and never edits `job.json`. |
-| Agents | `.claude/agents/*.md` | One instruction file per role. Each reads files, writes exactly one file, and replies with one line. |
+| Agents | `.claude/agents/*.md` | One instruction file per role. Agents leave reports and reply with one line. |
 | Spine | `factory/bin/job`, `gate`, `route` | Python, standard library only. `job` is the only writer of `job.json`. |
-| Config | `factory/config.json` | Concurrency, rounds, `auto_split`, labels, models, routing, protected paths, ports, prices. |
+| Config | `factory/config.json` | Concurrency, rounds, `auto_split`, labels, models, routing, protected paths, browser settings, env files, ports, prices. |
 | Checks | `factory/checks.sh` | The repo's lint, typecheck, test and build. The only repo-specific script. |
 | State | `factory/jobs/<job-id>/` | `job.json` plus every file the job wrote. Gitignored; local to the machine running the factory. |
 | Worktrees | `.worktrees/<job-id>/` | One full checkout per job, on branch `factory/<job-id>`. Gitignored. |
@@ -79,42 +79,90 @@ worktree (script)     factory/<job-id> from origin/main
 spec-writer (Opus 5.5) → spec.md with testable acceptance criteria
         ▼
 builder (gpt-6.1-sol) → commits, pushes, opens a draft PR "Closes #n", build.md
-        ▼              ▲
-gate (script) ─FAIL────┤  checks.sh + protected paths; no reviewer runs on a failing build
-        ▼ PASS         │
-reviewers ─CHANGES─────┤  code, + ux & ui on UI changes, + security; all in parallel, wait for all
-        ▼ all PASS     │
-github reviews ─FAIL───┘  PR marked ready; Codex + Greptile review HEAD; any unresolved thread → builder
+        ▼
+gate (script) ─FAIL──────► builder; checks.sh + protected paths
+        ▼ PASS
+browser (gpt-6.1-terra) ─► when needed; FAIL → builder, BLOCKED → needs-human
+        ▼ PASS or skipped
+reviewers ─CHANGES───────► builder; code, + ux & ui on UI changes, + security; all in parallel
+        ▼ all PASS (bot-fix rounds skip internal reviewers)
+bot reviews ─FAIL────────► builder; PR marked ready, bots review HEAD, unresolved threads send it back
         ▼ PASS            (TIMEOUT: a bot never reviewed HEAD → needs-human)
 approver (Opus 5.5) ── APPROVE  → sync with main, gate again, merge the PR
                     └─ ESCALATE → PR ready, decision posted, issue labeled factory:needs-human
 ```
 
-A **round** is one build → gate → review pass. A job gets at most
-`max_rounds` (3) rounds. When the last round still fails, the job goes to a
-human instead of another round. Feedback from a human on an escalated job
-starts a fresh budget of `max_rounds`.
+A **round** starts with build and gate. After a passing gate and any required
+browser test, a normal round goes to internal review and a bot-fix round goes
+to approve for bot reviews. A job gets at most `max_rounds` (3) rounds. A
+failure on the last round goes to a human. Feedback from a human on an
+escalated job starts a fresh budget of `max_rounds`.
 
 The orchestrator advances a job only when its current agent or script
 finishes. It reports one line per transition, for example
 `004-dark-mode #12: gate PASS → reviewing (code, ux, ui)`.
 
+### Browser stage
+
+After a passing gate, a job needs browser testing when `roles` has a
+`browser-tester` entry, `browser` is an object, intake's surfaces match
+`browser.surfaces` (default `["ui"]`), and the round is normal or HEAD lacks
+a matching `BROWSER: PASS` in the most recent earlier round that passed.
+Set `"browser": null` or `"browser": false` in `factory/config.json` to
+disable the stage.
+
+Only one job can be in `browser` at a time because computer use shares the
+desktop. If `job advance <id> browser` returns `browser busy:` with another
+job's id, the orchestrator leaves the job in `gate` and retries when the other
+job leaves `browser`.
+
+The browser-tester runs the worktree's dev server and follows the spec's
+`## Browser script` on its loopback port. It drives a dedicated Chrome window
+with Codex computer use and a throwaway profile. On Linux it uses the first
+available of `google-chrome` and `chromium`.
+`browser.computer_use` is enabled by default. If it is disabled or computer
+use or Chrome is unavailable, the tester runs `browser.setup` if set and uses
+`browser.cli` (`agent-browser` by default) with `--session <job-id>-browser`.
+The test uses only the local server and never uses T3's built-in preview.
+
+Set `browser.server_env` when the app's auth or base URL must match
+`http://127.0.0.1:<port>`. It maps environment variable names to value
+templates, for example `{"BETTER_AUTH_URL": "http://127.0.0.1:{port}"}`.
+The tester replaces `{port}` with the job port and passes the values to the
+dev server and seed command, overriding settings in the copied env files.
+
+For sign-in steps, the tester reads the variables named in `review_account`
+from its process environment first, then from the worktree copies of
+`env_files`. Set `env_files` to the repo-relative paths of the project's
+local env files, for example `["apps/web/.env"]`. The factory copies them
+from the main checkout when it creates the worktree, only if git ignores
+them, and sets mode `0600`. The tester runs the configured seed command once
+against local data when the script needs sign-in. Credential values stay
+out of the report, screenshots and logs.
+
+The tester writes `round-<N>/browser.md` with per-step results tied to HEAD
+and PNGs in `round-<N>/browser/`. The report's `## Widths` table lists a
+desktop and a 390 × 844 phone capture for every changed page. The UI and UX
+reviewers check both. PASS requires every step to run and match. FAIL sends
+a product defect, including a phone layout defect, to the builder while
+rounds remain. BLOCKED sends an environmental problem to a human.
+
 ## Job state
 
-`job.json`'s `stage` is one of twelve values. The legal moves are in
+`job.json`'s `stage` is one of thirteen values. The legal moves are in
 `TRANSITIONS` at the top of `factory/bin/job`. Any move not listed is
 refused.
 
 ```
-intake ──► spec ──► build ──► gate ──► review ──► approve ──► merging ──► merged
-  │  ▲               │  ▲      │  │      │  │        │           │
-  │  │               │  └──────┘  │      │  └─► build│           │
-  │  │               │   (FAIL)   │      │  (CHANGES)│           │
-  ▼  │               ▼            ▼      ▼           ▼           ▼
-needs-info        needs-human ◄───────────────────────────────────
-  │                  │  │
-  ▼                  │  └──► build   (human feedback)
-rejected ◄───────────┘
+intake → spec → build → gate → browser (when needed) → review → approve → merging → merged
+                            └─ bot-fix → browser (when needed) → approve
+
+intake → needs-info → intake (author reply)
+intake → rejected
+
+gate FAIL, browser FAIL, review CHANGES, bot review FAIL → build or needs-human
+browser BLOCKED → needs-human
+needs-human → build (human feedback) or rejected
 
 Split parents (intake said SPLIT):
 
@@ -131,7 +179,8 @@ intake ──(auto_split false)──► needs-human ──(job split)──► 
 | `needs-info` | no | the author replies on the issue → `intake` again (old intake.md kept as `intake-<k>.md`) |
 | `spec` | yes | spec.md exists → `build`, round 1 begins |
 | `build` | yes | build.md `STATUS: READY` + clean tree + pushed + one open PR → `gate`; `STATUS: BLOCKED` → `needs-human` |
-| `gate` | yes | checks.md `GATE: PASS` for the current commit → `review`; FAIL → `build` (next round) or `needs-human` (last round) |
+| `gate` | yes | checks.md `GATE: PASS` for the current commit → `browser` if needed, otherwise `review` (normal) or `approve` (bot-fix); FAIL → `build` (next round) or `needs-human` (last round) |
+| `browser` | yes | browser.md `BROWSER: PASS` for the current commit → `review` (normal) or `approve` (bot-fix); FAIL → `build` (same round kind) or `needs-human` (last round); BLOCKED → `needs-human` |
 | `review` | yes | every routed review present with a valid verdict; all PASS → `approve`; any CHANGES → `build` or `needs-human` |
 | `approve` | yes | first `job reviews`: `REVIEWS: FAIL` → `build` (or `needs-human` on the last round), `TIMEOUT` → `needs-human`, `PASS` → the approver runs; then decision.md `APPROVE` → `merging`, `ESCALATE` → `needs-human` |
 | `merging` | yes | `job merge` syncs, gates, merges → `merged`; any failure → `needs-human` |
@@ -159,15 +208,17 @@ PR ready and posts escalations, so the orchestrator never improvises them.
 | `intake` | parsed from intake.md: `decision`, `risk`, `surfaces`, `rescoped` |
 | `agents` | `{"reviewers": {"code": "opus", ...}}`, written by `route` |
 | `gate` | the current round's gate verdict |
+| `browser_needed` | whether the current round needs the browser stage |
+| `browser` | the current round's browser verdict: `PASS`, `FAIL`, `BLOCKED`, `pending` or `null` |
 | `reviews` | `{reviewer: PASS \| CHANGES \| pending \| invalid}` |
 | `cost_usd` | API-equivalent cost of the job's Claude and Codex agents |
 | `started`, `ended` | timestamps; `ended` is set in waiting and terminal stages |
 | `children` | on a split parent: `[{"issue", "title", "depends_on": [issue numbers]}]`, written by `job split`; otherwise null |
 | `parent` | on a split child: the parent's issue number; otherwise null |
 
-`job sync <id>` rebuilds `intake`, `gate`, `reviews` and `cost_usd` from the
-files, so the files are the source of truth and `job.json` is a cache of them
-plus the stage.
+`job sync <id>` refreshes `intake`, `gate`, `browser_needed`, `browser`,
+`reviews` and `cost_usd`. The files are the source of truth and `job.json`
+caches their results alongside the stage.
 
 ## The job folder
 
@@ -181,6 +232,8 @@ factory/jobs/<job-id>/
   build.md                  STATUS: READY | BLOCKED, Summary, Changes, criteria evidence, Log per round
   round-<N>/
     checks.md, checks.log           the gate's verdict and full output
+    browser.md                      BROWSER: PASS | FAIL | BLOCKED for COMMIT <sha>, per-step results
+    browser/                        PNG screenshots from the browser script
     merge-checks.md, merge-checks.log   the pre-merge gate (approved jobs only)
     review-<r>.md                   VERDICT: PASS | CHANGES, Findings, Notes
     reviews.md                      REVIEWS: PASS | FAIL | TIMEOUT for COMMIT <sha>, unresolved review threads
@@ -195,7 +248,7 @@ running the factory. Anyone else's comments never reach an agent.
 
 ## Agents
 
-All eight live in `.claude/agents/`. Under T3 their frontmatter carries only
+All nine live in `.claude/agents/`. Under T3 their frontmatter carries only
 `name` and `description`; the model comes from config, and the orchestrator
 tells each child to read its file and follow it.
 
@@ -203,11 +256,12 @@ tells each child to read its file and follow it.
 |---|---|---|---|
 | `intake` | issue.md, the codebase, feedback on a split | intake.md | `DECISION: ACCEPT \| NEEDS-INFO \| REJECT \| SPLIT` (+ RISK, SURFACES, RESCOPED) |
 | `spec-writer` | issue.md, intake.md, the codebase | spec.md | `# <title>` |
-| `builder` | AGENTS.md, spec.md, last round's checks/reviews, feedback | code, commits, PR, build.md | `STATUS: READY \| BLOCKED` |
+| `builder` | AGENTS.md, spec.md, last round's checks, browser report and reviews, feedback | code, commits, PR, build.md | `STATUS: READY \| BLOCKED` |
+| `browser-tester` | AGENTS.md, spec.md's Browser script, `route --browser` | round-N/browser.md, round-N/browser/ | `BROWSER: PASS \| FAIL \| BLOCKED` |
 | `reviewer-code` | spec.md, build.md, the diff | round-N/review-code.md | `VERDICT: PASS \| CHANGES` |
 | `reviewer-security` | same | round-N/review-security.md | `VERDICT: PASS \| CHANGES` |
-| `reviewer-ux` | same, plus the running app | round-N/review-ux.md | `VERDICT: PASS \| CHANGES` |
-| `reviewer-ui` | same, plus the running app | round-N/review-ui.md | `VERDICT: PASS \| CHANGES` |
+| `reviewer-ux` | same, plus browser.md and screenshots | round-N/review-ux.md | `VERDICT: PASS \| CHANGES` |
+| `reviewer-ui` | same, plus browser.md and screenshots | round-N/review-ui.md | `VERDICT: PASS \| CHANGES` |
 | `approver` | everything above | decision.md | `APPROVE \| ESCALATE` |
 
 What each one is for:
@@ -230,9 +284,11 @@ What each one is for:
   `/to-spec` skill; its no-file-paths rule is deliberately not used, because a
   factory spec is read by the builder minutes later, not left in a tracker.
 - **builder** implements the spec in the job's worktree, runs `checks.sh`,
-  verifies each criterion with evidence, pushes, opens the draft PR, and keeps
+  verifies criteria with tests, pushes, opens the draft PR, and keeps
   a per-round Log in build.md. Under T3 it is spawned fresh each round and
   catches up from build.md and `git log`.
+- **browser-tester** runs the script in the local app and records which
+  acceptance criteria it verified live.
 - **reviewers** don't rerun the test suite; the gate already did. They read
   the diff for what scripts can't judge: correctness and scope (code), threats
   (security), flows, states, copy and accessibility (ux), and visual fit with
@@ -244,8 +300,8 @@ What each one is for:
   data or new dependencies; product decisions hiding in spec Assumptions; and,
   in this copy, any change under `.claude/` or `factory/`.
 
-Agents that open pages get ports: with `n` the job number, the builder uses
-`5100 + 10n`, `reviewer-ux` `5101 + 10n` and `reviewer-ui` `5102 + 10n`.
+The browser-tester uses the builder's port, `ports.base + ports.step * n`
+with `n` the job number. The default is `5100 + 10n`.
 
 ## Models and routing
 
@@ -258,6 +314,7 @@ full ID.
   "fable":  { "provider": "claudeAgent", "model": "claude-fable-5-2",  "options": { "effort": "high" } },
   "opus":   { "provider": "claudeAgent", "model": "claude-opus-5-5",   "options": { "effort": "high" } },
   "sol":    { "provider": "codex",       "model": "gpt-6.1-sol",       "options": { "reasoningEffort": "high" } },
+  "terra":  { "provider": "codex",       "model": "gpt-6.1-terra",      "options": { "reasoningEffort": "xhigh" } },
   "daybreak-blue": { "provider": "codex", "model": "gpt-daybreak-blue-latest",
                      "options": { "reasoningEffort": "high", "cyberAccessProgram": "daybreakBlue" } }
 }
@@ -270,6 +327,7 @@ Fixed roles (`roles`):
 | intake | Fable 5.2 |
 | spec-writer | Opus 5.5 |
 | builder | gpt-6.1-sol, high |
+| browser-tester | gpt-6.1-terra, xhigh |
 | approver | Opus 5.5 |
 
 Reviewers (`routing` by intake's risk, plus `surface_reviewers` by surface):
@@ -314,7 +372,7 @@ job reject <job>               needs-info / needs-human / split → rejected, wi
 job split <job>                SPLIT intake → file the child issues, park the parent in split
 job reviews <job>              approve stage: PR ready, wait for the review bots on HEAD → round-N/reviews.md
 job agents <job> <json>        record the routed agent set (route calls this)
-job sync <job>                 refresh reviews, gate and cost from the job's files
+job sync <job>                 refresh reviews, gate, browser and cost from the job's files
 job summary [<job>...]         table: issue, stage, round, PR, cost, time
 ```
 
@@ -348,6 +406,7 @@ weakened tests instead.
 - `route --target <role> [<job-id>]` prints the T3 target for one agent:
   `{"providerInstanceId", "model", "options"}`. Fixed roles need no job id;
   `reviewer-<r>` reads the job's routed reviewers. This was added for T3.
+- `route --browser` prints `browser`, `review_account` and `env_files` as JSON.
 
 ### `factory/checks.sh`
 
@@ -388,7 +447,7 @@ job's transcripts by that string.
 
 Lifecycle rules:
 
-- Every build round, review and approval is a **new child**. Finished children
+- Every build round, browser run, review and approval is a **new child**. Finished children
   never get follow-up messages. The reference resumed one builder per job with
   `SendMessage`; here state lives in files, so a fresh builder reads build.md,
   `git log` and the round files and carries on.
@@ -532,8 +591,8 @@ before the approver runs.
 3. **FAIL sends the job back to the builder** for a new round, which counts
    toward `max_rounds`. The builder either fixes each thread (and replies with
    the commit) or answers it with a concrete reason, then resolves it. The
-   next round goes through the gate, the internal reviewers and this step
-   again, because the bots review the new commit.
+   next round goes through the gate, the browser stage when needed, and this
+   step again, because the bots review the new commit.
 4. **PASS lets the approver run.** The approver also reads `reviews.md` and
    the threads earlier rounds resolved, and treats a weakly answered thread as
    a real problem.
@@ -572,7 +631,7 @@ Close them first if you build on this.
 
 | Lost | Reference | Here | Mitigation today |
 |---|---|---|---|
-| **Tool limits** | Frontmatter `tools:` gave intake no shell and reviewers no Edit | Every child has full tools | Instructions say which one file each agent may write; scripts refuse illegal state moves |
+| **Tool limits** | Frontmatter `tools:` gave intake no shell and reviewers no Edit | Every child has full tools | Instructions name the files each agent may write. Scripts refuse illegal state moves. |
 | **Intake has a shell** | Intake read untrusted issue text without Bash, so a prompt injection couldn't run commands | Intake can run commands | The label is still the trust boundary: only triage/write users can queue an issue |
 | **Builder stop hook** | A `SubagentStop` hook ran `checks.sh` before the builder could finish | No hook (`gate --hook` is unused) | The task tells the builder to pass the checks before replying READY; the gate still decides |
 | **Builder memory** | One builder per job, resumed each round | A fresh builder per round | build.md's per-round Log and `git log` carry the history |
@@ -695,7 +754,7 @@ The factory has a few seams; most changes land in exactly one.
 
 Principles worth keeping in any version:
 
-1. **One writer for state.** Agents write their own file; only a script moves
+1. **One writer for state.** Agents write their reports. Only a script moves
    the job, and it checks the files that justify the move.
 2. **First lines are the API.** Machine-readable first lines let a small
    orchestrator run many jobs without reading everything.
