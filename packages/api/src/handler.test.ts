@@ -81,7 +81,10 @@ afterAll(async () => {
   } finally {
     try {
       if (created) {
-        await admin.query(`DROP DATABASE "${databaseName}" WITH (FORCE)`);
+        // pool.end() resolves before its sockets close. FORCE would kill those
+        // closing sessions and surface 57P01 as an unhandled error, so let
+        // Postgres wait for them to exit instead.
+        await admin.query(`DROP DATABASE "${databaseName}"`);
       }
     } finally {
       await admin.end();
