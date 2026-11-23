@@ -104,11 +104,12 @@ finishes. It reports one line per transition, for example
 
 ### Browser stage
 
-After a passing gate, a job needs browser testing when `browser` is an
-object, intake's surfaces match `browser.surfaces` (default `["ui"]`), and
-the round is normal or HEAD lacks a matching `BROWSER: PASS` in the most
-recent earlier round that passed. Set `"browser": null` or `"browser": false`
-in `factory/config.json` to disable the stage.
+After a passing gate, a job needs browser testing when `roles` has a
+`browser-tester` entry, `browser` is an object, intake's surfaces match
+`browser.surfaces` (default `["ui"]`), and the round is normal or HEAD lacks
+a matching `BROWSER: PASS` in the most recent earlier round that passed.
+Set `"browser": null` or `"browser": false` in `factory/config.json` to
+disable the stage.
 
 Only one job can be in `browser` at a time because computer use shares the
 desktop. If `job advance <id> browser` returns `browser busy:` with another
@@ -116,12 +117,19 @@ job's id, the orchestrator leaves the job in `gate` and retries when the other
 job leaves `browser`.
 
 The browser-tester runs the worktree's dev server and follows the spec's
-`## Browser script` on its loopback port. It drives a dedicated window in
-the system's Google Chrome with Codex computer use and a throwaway profile.
+`## Browser script` on its loopback port. It drives a dedicated Chrome window
+with Codex computer use and a throwaway profile. On Linux it uses the first
+available of `google-chrome` and `chromium`.
 `browser.computer_use` is enabled by default. If it is disabled or computer
 use or Chrome is unavailable, the tester runs `browser.setup` if set and uses
 `browser.cli` (`agent-browser` by default) with `--session <job-id>-browser`.
 The test uses only the local server and never uses T3's built-in preview.
+
+Set `browser.server_env` when the app's auth or base URL must match
+`http://127.0.0.1:<port>`. It maps environment variable names to value
+templates, for example `{"BETTER_AUTH_URL": "http://127.0.0.1:{port}"}`.
+The tester replaces `{port}` with the job port and passes the values to the
+dev server and seed command, overriding settings in the copied env files.
 
 For sign-in steps, the tester reads the variables named in `review_account`
 from its process environment first, then from the worktree copies of
@@ -133,10 +141,11 @@ against local data when the script needs sign-in. Credential values stay
 out of the report, screenshots and logs.
 
 The tester writes `round-<N>/browser.md` with per-step results tied to HEAD
-and PNGs in `round-<N>/browser/`. PASS requires every step to run and match.
-FAIL sends a product defect to the builder while rounds remain. BLOCKED
-sends an environmental problem to a human. Reviewers use the browser report
-and screenshots as live evidence.
+and PNGs in `round-<N>/browser/`. The report's `## Widths` table lists a
+desktop and a 390 × 844 phone capture for every changed page. The UI and UX
+reviewers check both. PASS requires every step to run and match. FAIL sends
+a product defect, including a phone layout defect, to the builder while
+rounds remain. BLOCKED sends an environmental problem to a human.
 
 ## Job state
 

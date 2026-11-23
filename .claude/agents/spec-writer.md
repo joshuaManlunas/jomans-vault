@@ -80,14 +80,18 @@ every item must be checkable by someone who only has the repo.
 ## Browser script
 Include this section when intake's surfaces match `browser.surfaces` on an
 enabled browser configuration. Number the steps in execution order. For each
-step, give the URL path, exactly what to click or type by visible label, the
-expected visible result, and the acceptance criterion it proves (for example
-`AC1`). Use results a tester can check without judgment.
+interaction step, give the URL path, exactly what to click or type by visible
+label, the expected visible result, and the acceptance criterion it proves
+(for example `AC1`). Use results a tester can check without judgment.
 
 Put setup first, including signing in with the review account and creating
 any required test data through the UI. List signed-out checks under a
 separate `### Signed-out checks` heading. Include how to reach a signed-out
 state when an earlier step signed in.
+
+End with a numbered `Widths` step that lists each changed page by URL path.
+Include any required signed-in or signed-out state for each path. Write
+`None.` in this step if no pages changed.
 
 ## Out of scope
 What a reasonable builder might be tempted to do but must not, including

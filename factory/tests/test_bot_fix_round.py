@@ -21,8 +21,12 @@ class BotFixRoundTests(unittest.TestCase):
             shutil.copy2(REPO / "factory/bin" / name, self.factory / "bin" / name)
         self.config_path = self.factory / "config.json"
         copy_config(REPO / "factory/config.json", self.config_path)
-        self.configure(max_rounds=3, browser={}, env_files=[])
         config = json.loads(self.config_path.read_text())
+        config.update(max_rounds=3, browser={"surfaces": ["ui"]}, env_files=[])
+        config["roles"]["browser-tester"] = "terra"
+        config["models"]["terra"] = {"provider": "codex", "model": "gpt-6.1-terra",
+                                     "options": {"reasoningEffort": "xhigh"}}
+        self.config_path.write_text(json.dumps(config))
         self.checks = self.factory / "checks.sh"
         self.checks.write_text("exit 0\n")
 

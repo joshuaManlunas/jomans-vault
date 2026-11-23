@@ -122,7 +122,10 @@
     "computer_use": true,
     "chrome_app": "Google Chrome",
     "cli": "playwright-cli",
-    "setup": "playwright-cli --help"
+    "setup": "playwright-cli --help",
+    "server_env": {
+      "BETTER_AUTH_URL": "http://127.0.0.1:{port}"
+    }
   },
   "review_account": {
     "email_env": "FACTORY_REVIEW_EMAIL",

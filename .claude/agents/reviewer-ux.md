@@ -29,7 +29,8 @@ is in the main checkout; your one file goes there.
 ## Browser evidence
 
 Read `<job folder>/round-<N>/browser.md` and open its PNG screenshots with
-Read. Use them as live evidence and review the code against what they show.
+Read. Check both desktop and phone captures for each page in `## Widths`.
+Use them as live evidence and review the code against what they show.
 Keep the review to the code and these artifacts. In `## Notes`, list each
 acceptance criterion the script did not cover. If the report is absent, say
 which criteria lack live evidence.
