@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 
 import type { Auth } from "./index";
 
@@ -22,6 +23,10 @@ export interface SeedReviewerResult {
   action: "created" | "updated";
   userId: string;
 }
+
+/** Read a dotenv file the way the app does (comments, quotes, `export`); missing file reads as empty. */
+export const readEnvFile = (envFilePath: string): NodeJS.Dict<string> =>
+  existsSync(envFilePath) ? parseEnv(readFileSync(envFilePath, "utf-8")) : {};
 
 export const readReviewerEnvNames = (configPath: string): ReviewerEnvNames => {
   const raw = JSON.parse(readFileSync(configPath, "utf-8")) as {

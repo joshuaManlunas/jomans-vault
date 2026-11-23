@@ -1,52 +1,23 @@
-import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDb } from "@jomans-vault/db";
 
 import { createAuth } from "./index";
-import { readReviewerEnvNames, seedReviewerAccount } from "./seed-reviewer";
+import {
+  readEnvFile,
+  readReviewerEnvNames,
+  seedReviewerAccount,
+} from "./seed-reviewer";
 
-const ENV_LINE_RE =
-  /^(?:export\s+)?(?<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<value>.*)$/u;
-const NEWLINE_RE = /\r?\n/u;
-
-const loadFallbackEnv = (envFilePath: string): Record<string, string> => {
-  if (!existsSync(envFilePath)) {
-    return {};
-  }
-  const values: Record<string, string> = {};
-  const lines = readFileSync(envFilePath, "utf-8").split(NEWLINE_RE);
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const match = ENV_LINE_RE.exec(line);
-    const key = match?.groups?.key;
-    if (!key) {
-      continue;
-    }
-    let value = (match.groups?.value ?? "").trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    values[key] = value;
-  }
-  return values;
-};
-
-const getEnv = (fallback: Record<string, string>, key: string): string =>
+const getEnv = (fallback: NodeJS.Dict<string>, key: string): string =>
   process.env[key] ?? fallback[key] ?? "";
 
 const main = async () => {
   const repoRoot = path.resolve(
     fileURLToPath(new URL("../../..", import.meta.url))
   );
-  const fallback = loadFallbackEnv(path.resolve(repoRoot, "apps/web/.env"));
+  const fallback = readEnvFile(path.resolve(repoRoot, "apps/web/.env"));
   const { emailEnv, passwordEnv } = readReviewerEnvNames(
     path.resolve(repoRoot, "factory/config.json")
   );

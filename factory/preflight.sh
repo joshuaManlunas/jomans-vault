@@ -15,16 +15,18 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-published_containers=$(docker ps --filter publish=5432 --format '{{.Names}}' 2>/dev/null || true)
+# Match the host side of each binding ("0.0.0.0:5432->5432/tcp"), not the container
+# side: `docker ps --filter publish=5432` also matches a "15432:5432" mapping.
+host_owners=$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null |
+  awk -F '\t' 'index($2, ":5432->") {print $1}' || true)
 while IFS= read -r name; do
-  [ -z "$name" ] && continue
   if [ "$name" = "jomans-vault-postgres" ]; then
     exit 0
   fi
-done <<< "$published_containers"
+done <<< "$host_owners"
 
-if [ -n "$published_containers" ]; then
-  owners=$(printf '%s' "$published_containers" | paste -sd ', ' -)
+if [ -n "$host_owners" ]; then
+  owners=$(printf '%s' "$host_owners" | paste -sd ', ' -)
   echo "Port 5432 is served by another Docker container (${owners}), not jomans-vault-postgres." >&2
   exit 1
 fi

@@ -1,8 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createAuth } from "../packages/auth/src/index";
+import { readEnvFile } from "../packages/auth/src/seed-reviewer";
 import { createDb } from "../packages/db/src/index";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -104,4 +107,25 @@ test("db:seed-reviewer is idempotent and creates a working Better Auth account",
   });
   expect(signIn.user.id).toBe(rows.rows[0]?.id ?? "");
   expect(signIn.user.email).toBe(email);
+});
+
+test("the apps/web/.env fallback drops inline comments and quotes", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "seed-reviewer-env-"));
+  const file = path.join(dir, ".env");
+  writeFileSync(
+    file,
+    [
+      "FACTORY_REVIEW_PASSWORD=example-password # local reviewer",
+      'FACTORY_REVIEW_EMAIL="reviewer@example.invalid" # quoted',
+    ].join("\n")
+  );
+  try {
+    expect(readEnvFile(file)).toEqual({
+      FACTORY_REVIEW_EMAIL: "reviewer@example.invalid",
+      FACTORY_REVIEW_PASSWORD: "example-password",
+    });
+    expect(readEnvFile(path.join(dir, "missing.env"))).toEqual({});
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
 });
