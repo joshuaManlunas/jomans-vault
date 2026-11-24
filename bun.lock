@@ -18,6 +18,23 @@
         "varlock": "catalog:",
       },
     },
+    "apps/cli": {
+      "name": "@jomans-vault/cli",
+      "dependencies": {
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@jomans-vault/api": "workspace:*",
+        "@jomans-vault/auth": "workspace:*",
+        "@jomans-vault/config": "workspace:*",
+        "@jomans-vault/db": "workspace:*",
+        "@types/bun": "^1.4.4",
+        "@types/pg": "^8.23.1",
+        "drizzle-orm": "catalog:",
+        "pg": "^8.23.0",
+        "typescript": "catalog:",
+      },
+    },
     "apps/fumadocs": {
       "name": "fumadocs",
       "dependencies": {
@@ -393,6 +410,8 @@
     "@jomans-vault/api": ["@jomans-vault/api@workspace:packages/api"],
 
     "@jomans-vault/auth": ["@jomans-vault/auth@workspace:packages/auth"],
+
+    "@jomans-vault/cli": ["@jomans-vault/cli@workspace:apps/cli"],
 
     "@jomans-vault/config": ["@jomans-vault/config@workspace:packages/config"],
 

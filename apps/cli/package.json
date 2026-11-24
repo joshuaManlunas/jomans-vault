@@ -1,0 +1,24 @@
+{
+  "name": "@jomans-vault/cli",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build --compile src/index.ts --outfile dist/jv",
+    "check-types": "tsc --noEmit",
+    "test": "bun run build && bun test"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@jomans-vault/api": "workspace:*",
+    "@jomans-vault/auth": "workspace:*",
+    "@jomans-vault/config": "workspace:*",
+    "@jomans-vault/db": "workspace:*",
+    "@types/bun": "^1.4.4",
+    "@types/pg": "^8.23.1",
+    "drizzle-orm": "catalog:",
+    "pg": "^8.23.0",
+    "typescript": "catalog:"
+  }
+}

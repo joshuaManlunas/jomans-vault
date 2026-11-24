@@ -131,6 +131,8 @@ Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run
 
 After pulling a change that adds a migration, update the local database with `bun run db:migrate`.
 
+**CLI.** `bun run build:cli` builds the executable `apps/cli/dist/jv`. CLI tests build the binary first, require Postgres, and never touch the real keychain: they use `JV_TEST_KEYCHAIN`. The config directory is `$XDG_CONFIG_HOME/jv` when absolute, otherwise `~/.config/jv`.
+
 **Dev server.** `bun run dev:web -- --port <port>` starts the web app (default port 3001). The docs site: `cd apps/fumadocs && bun run dev -- --port <port>` (default 4000).
 
 **Validation** (what `factory/checks.sh` runs, from the repo root): `bun run check` (lint + format), `bun run check-types`, `bun run build`, and `bun run test`, which runs `bun test` in every package with a `test` script. The crypto tests need no database; the api package tests need Postgres up and create and drop their own database.

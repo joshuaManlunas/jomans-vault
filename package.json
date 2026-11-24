@@ -45,7 +45,8 @@
     "postinstall": "varlock codegen --path ./apps/web/ && varlock codegen --path ./packages/db/",
     "auth:generate": "cd apps/web && bun run auth:generate",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "fix": "ultracite fix",
+    "build:cli": "turbo run build -F @jomans-vault/cli"
   },
   "dependencies": {
     "zod": "catalog:"
