@@ -6,7 +6,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { createAuth } from "@jomans-vault/auth";
@@ -591,11 +591,11 @@ test("RPC supports session create, list, revoke and rejects API keys", async () 
 });
 
 test("migration only makes project_id nullable and adds api_key_id", async () => {
-  const migrations = new URL("../../db/src/migrations/", import.meta.url);
-  const folders = await readdir(migrations);
-  const latest = folders.toSorted().at(-1);
   const migration = await readFile(
-    new URL(`${latest}/migration.sql`, migrations),
+    new URL(
+      "../../db/src/migrations/20261124194541_sharp_eddie_brock/migration.sql",
+      import.meta.url
+    ),
     "utf-8"
   );
   expect(
