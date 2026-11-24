@@ -423,6 +423,47 @@ test("project and actor filters combine without exposing other users", async () 
   );
 });
 
+test("actor filter retains deleted-key events visible through a live project", async () => {
+  const user = await signupUser("audit-missing-key@example.com");
+  const slug = "audit-missing-key";
+  const projectId = await createProject(user, slug);
+  const actorId = "deleted-key-id";
+  const event = {
+    id: "deleted-key-project-event",
+    projectId,
+    action: "secret.reveal",
+    actorType: "apiKey",
+    actorId,
+  };
+  await db
+    .insert(auditEvent)
+    .values([
+      event,
+      { ...event, id: "deleted-key-unowned-event", projectId: null },
+      { ...event, id: "deleted-key-wrong-actor-event", actorType: "user" },
+    ]);
+  expect(
+    await db
+      .select({ id: apikey.id })
+      .from(apikey)
+      .where(eq(apikey.id, actorId))
+  ).toEqual([]);
+  const { events } = await list("", user);
+  expect(events).toContainEqual(expect.objectContaining(event));
+  const filtered = await list(`?actor=${actorId}`, user);
+  expect(filtered).toEqual({
+    events: [expect.objectContaining(event)],
+    nextCursor: null,
+  });
+  expect(await list(`?project=${slug}&actor=${actorId}`, user)).toEqual(
+    filtered
+  );
+  expect(await list(`?actor=${actorId}`, other.user)).toEqual({
+    events: [],
+    nextCursor: null,
+  });
+});
+
 test("each SQL ownership alternative works independently and unknown stored strings remain readable", async () => {
   const rows = [
     {

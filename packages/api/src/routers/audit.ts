@@ -90,7 +90,10 @@ export const auditRouter = {
       );
       let actorFilter = userActor;
       if (input.actor !== undefined && input.actor !== "user") {
-        actorFilter = and(keyActor, eq(auditEvent.actorId, input.actor));
+        actorFilter = and(
+          eq(auditEvent.actorType, "apiKey"),
+          eq(auditEvent.actorId, input.actor)
+        );
       }
       const rows = await context.db
         .select({
