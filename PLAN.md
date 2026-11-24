@@ -76,6 +76,7 @@ Every procedure declares `.route({ method, path })` so it appears in the OpenAPI
 | Bulk export | `GET …/envs/{env}/export?format=dotenv\|json` | What the CLI and Varlock plugin use to inject a whole environment in one call. Returns plaintext, so it requires the `inject` permission. Audited as `secret.export`. Dotenv output is promised to round-trip only through the `dotenv` npm package (17.4.2); a value it cannot carry returns 422 naming the key, and JSON always works. |
 | History / rollback | `GET …/secrets/{key}/versions`, `POST …/secrets/{key}/rollback` | Rollback takes `{ version }` |
 | Projects / envs | CRUD under `/api/v1/projects` | Human sessions by default (see §3) |
+| CLI login requests | `POST /api/v1/login-requests`; read, approve, deny and poll under `/api/v1/login-requests/{id}` | Open and poll without sign-in; read, approve and deny require a user session |
 | List audit events | `GET /api/v1/audit` | Signed-in users only. Newest first, cursor paging, optional project and actor filters |
 
 Zod input schemas define the shape of a key: `^[A-Z_][A-Z0-9_]*$`, plus a maximum value size. They feed both validation and the generated OpenAPI spec.
@@ -111,7 +112,7 @@ apiKey({
 - Keys are shown once at creation. The plugin stores only a hash. Keys can expire and be revoked from the UI.
 - Run `bun run auth:generate` after adding the plugin, then generate and apply a migration.
 
-**CLI login:** `jv login` opens the browser to `/cli/authorize`, a new `apps/web` route under `_auth/`. There the signed-in human approves a scoped key for that machine. The key goes into the OS credential store, never into a dotfile (see §4).
+**CLI login:** `jv login` opens the browser to `/cli/authorize`, a new `apps/web` route under `_auth/`. There the signed-in human approves a scoped key for that machine. The login request expires after 5 minutes, and the key is collected once with the polling secret. The key goes into the OS credential store, never into a dotfile (see §4).
 
 ## 4. Local development without secrets on disk
 

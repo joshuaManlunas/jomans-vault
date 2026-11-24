@@ -4,6 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import * as z from "zod";
 
+import type { Context, KeyPermission, Principal } from "../context";
 import { userProcedure } from "../index";
 import { recordAuditEvent } from "../middleware/audit";
 import { slug } from "./validation";
@@ -30,27 +31,71 @@ const summaryOutput = z.object({
   createdAt: z.string(),
   revoked: z.boolean(),
 });
+export const scopeInput = z.object({
+  projects: z
+    .record(
+      slug,
+      z
+        .array(slug)
+        .min(1)
+        .transform((envs) => [...new Set(envs)])
+    )
+    .refine((projects) => Object.keys(projects).length > 0),
+});
+export const permissionsInput = (defaults: KeyPermission[]) =>
+  z
+    .array(permission)
+    .optional()
+    .transform((values) => [...new Set(values?.length ? values : defaults)]);
 const createInput = z.object({
   name: z.string().trim().min(1).max(32),
   expiresIn: z.number().int().min(86_400).max(31_536_000).optional(),
-  scope: z.object({
-    projects: z
-      .record(
-        slug,
-        z
-          .array(slug)
-          .min(1)
-          .transform((envs) => [...new Set(envs)])
-      )
-      .refine((projects) => Object.keys(projects).length > 0),
-  }),
-  permissions: z
-    .array(permission)
-    .optional()
-    .transform((values) => [
-      ...new Set(values?.length ? values : ["read" as const]),
-    ]),
+  scope: scopeInput,
+  permissions: permissionsInput(["read"]),
 });
+
+export const issueApiKey = async (
+  context: Context & { principal: Extract<Principal, { type: "user" }> },
+  input: z.infer<typeof createInput>,
+  db: Context["db"] = context.db
+) => {
+  const userId = context.principal.user.id;
+  const ownedEnvironments = await db
+    .select({ project: project.slug, environment: environment.slug })
+    .from(project)
+    .innerJoin(environment, eq(environment.projectId, project.id))
+    .where(eq(project.ownerId, userId));
+  for (const [projectSlug, envs] of Object.entries(input.scope.projects)) {
+    if (
+      !envs.every((env) =>
+        ownedEnvironments.some(
+          (row) => row.project === projectSlug && row.environment === env
+        )
+      )
+    ) {
+      throw new ORPCError("BAD_REQUEST");
+    }
+  }
+  const created = await context.auth.api.createApiKey({
+    body: {
+      userId,
+      name: input.name,
+      ...(input.expiresIn === undefined ? {} : { expiresIn: input.expiresIn }),
+      metadata: input.scope,
+      permissions: { secrets: input.permissions },
+    },
+  });
+  try {
+    await recordAuditEvent(db, context, "apikey.create", {
+      apiKeyId: created.id,
+    });
+  } catch (error) {
+    // Better Auth writes outside the caller's transaction; compensate outside it too.
+    await context.db.delete(apikey).where(eq(apikey.id, created.id));
+    throw error;
+  }
+  return created;
+};
 const summaryColumns = {
   id: apikey.id,
   name: apikey.name,
@@ -108,42 +153,7 @@ export const apiKeysRouter = {
     .input(createInput)
     .output(summaryOutput.extend({ key: z.string() }))
     .handler(async ({ context, input }) => {
-      const userId = context.principal.user.id;
-      const ownedEnvironments = await context.db
-        .select({ project: project.slug, environment: environment.slug })
-        .from(project)
-        .innerJoin(environment, eq(environment.projectId, project.id))
-        .where(eq(project.ownerId, userId));
-      for (const [projectSlug, envs] of Object.entries(input.scope.projects)) {
-        if (
-          !envs.every((env) =>
-            ownedEnvironments.some(
-              (row) => row.project === projectSlug && row.environment === env
-            )
-          )
-        ) {
-          throw new ORPCError("BAD_REQUEST");
-        }
-      }
-      const created = await context.auth.api.createApiKey({
-        body: {
-          userId,
-          name: input.name,
-          ...(input.expiresIn === undefined
-            ? {}
-            : { expiresIn: input.expiresIn }),
-          metadata: input.scope,
-          permissions: { secrets: input.permissions },
-        },
-      });
-      try {
-        await recordAuditEvent(context.db, context, "apikey.create", {
-          apiKeyId: created.id,
-        });
-      } catch (error) {
-        await context.db.delete(apikey).where(eq(apikey.id, created.id));
-        throw error;
-      }
+      const created = await issueApiKey(context, input);
       return { ...summarize(created), key: created.key };
     }),
   list: userProcedure
