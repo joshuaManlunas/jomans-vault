@@ -214,6 +214,65 @@ const expectError = async (
   }
 };
 
+test("authenticated HTTP requests cannot manage API keys", async () => {
+  const key = await createKey(["read"]);
+  const before = await db.select().from(apikey).orderBy(apikey.id);
+  const auditBefore = await db.select().from(auditEvent).orderBy(auditEvent.id);
+  const routes: [string, string, unknown?][] = [
+    ["POST", "create", { metadata: scope }],
+    ["GET", "list"],
+    ["GET", `get?id=${key.id}`],
+    ["POST", "update", { keyId: key.id, name: "HTTP changed" }],
+    ["POST", "delete", { keyId: key.id }],
+  ];
+  await Promise.all(
+    routes.flatMap(([method, path, body]) =>
+      ["", "/"].map(async (suffix) => {
+        const url = new URL(`${baseURL}/api/auth/api-key/${path}`);
+        url.pathname += suffix;
+        const response = await auth.handler(
+          new Request(url.toString(), {
+            method,
+            headers: {
+              "Content-Type": "application/json",
+              Origin: baseURL,
+              cookie: userA.cookie,
+            },
+            body: body === undefined ? undefined : JSON.stringify(body),
+          })
+        );
+        expect(response.status).toBe(404);
+        expect(await response.text()).toBe("Not Found");
+      })
+    )
+  );
+  expect(await db.select().from(apikey).orderBy(apikey.id)).toEqual(before);
+  expect(await db.select().from(auditEvent).orderBy(auditEvent.id)).toEqual(
+    auditBefore
+  );
+});
+
+test("trusted server API key management remains available", async () => {
+  const key = await createKey(["read"]);
+  await auth.api.updateApiKey({
+    body: { keyId: key.id, userId: userA.id, name: "Server changed" },
+  });
+  const headers = new Headers({ cookie: userA.cookie });
+  const stored = await auth.api.getApiKey({ query: { id: key.id }, headers });
+  expect(stored.name).toBe("Server changed");
+  const listed = await auth.api.listApiKeys({ query: {}, headers });
+  expect(listed.apiKeys).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: key.id })])
+  );
+  const response = await keyRequest(key.key);
+  expect(response.status).toBe(200);
+  await auth.api.deleteApiKey({ body: { keyId: key.id }, headers });
+  expect(await db.select().from(apikey).where(eq(apikey.id, key.id))).toEqual(
+    []
+  );
+  await expectError(await keyRequest(key.key), 401, "UNAUTHORIZED");
+});
+
 test("both key headers trim values, match Bearer case-insensitively, and accept equal keys", async () => {
   const headerCases: Record<string, string>[] = [
     { Authorization: `Bearer ${keys.read.key}` },

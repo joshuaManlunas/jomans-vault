@@ -20,6 +20,13 @@ export const createAuth = (env: AuthConfig, database: Database) =>
     emailAndPassword: { enabled: true },
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
+    disabledPaths: [
+      "/api-key/create",
+      "/api-key/list",
+      "/api-key/get",
+      "/api-key/update",
+      "/api-key/delete",
+    ],
     plugins: [
       apiKey({
         defaultPrefix: "jv_",
