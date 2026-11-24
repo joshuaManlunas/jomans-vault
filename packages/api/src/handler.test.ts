@@ -594,10 +594,12 @@ test("data keys are wrapped and audit history survives deletion", async () => {
       ip: "192.0.2.1",
       userAgent: "Vault API test",
     });
+    expect(event.apiKeyId).toBeNull();
     expect(Object.keys(event).toSorted()).toEqual([
       "action",
       "actorId",
       "actorType",
+      "apiKeyId",
       "createdAt",
       "environmentId",
       "id",

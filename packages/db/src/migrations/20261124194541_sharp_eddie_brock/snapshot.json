@@ -1,0 +1,72 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "9954fb81-0bc6-4ffc-b5a6-2029d0004a14",
+  "prevIds": [
+    "3aad175c-5f4a-4f89-8fcf-8ed1baf8fcdf"
+  ],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "audit_event",
+        "api_key_id"
+      ],
+      "writes": [
+        "s|col|public.audit_event.api_key_id",
+        "n|col|public.audit_event.api_key_id",
+        "e|col|public.audit_event.api_key_id"
+      ],
+      "reads": [
+        "n|tbl|public.audit_event",
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "alter_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "audit_event",
+        "project_id"
+      ],
+      "writes": [
+        "s|colprop|public.audit_event.project_id.notNull"
+      ],
+      "reads": [
+        "n|tbl|public.audit_event",
+        "n|sch|public",
+        "n|col|public.audit_event.project_id"
+      ],
+      "sqlHash": "4d5d12a22f56261d"
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "audit_event",
+        "name": "api_key_id",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "alter",
+      "key": "columns\u0000[\"public\",\"audit_event\",\"project_id\"]",
+      "set": {
+        "notNull": false
+      }
+    }
+  ]
+}
