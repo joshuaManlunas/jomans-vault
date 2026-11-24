@@ -259,6 +259,45 @@ test("keychain storage removes only this vault's fallback entry", async () => {
   expect(await mode(path)).toBe(0o600);
 }, 15_000);
 
+test.each(["credential", "remembered URL"])(
+  "%s storage failures preserve the cause and report whether the key was stored",
+  async (phase) => {
+    const box = await sandbox();
+    const blockedPath = configPath(
+      box,
+      phase === "credential" ? "credentials.json" : "config.json"
+    );
+    await mkdir(blockedPath, { recursive: true });
+    if (phase === "credential") {
+      box.env.JV_TEST_KEYCHAIN = "unavailable";
+    }
+    const { child, id } = await begin(box);
+    await approve(id);
+    const output = await child.waitForExit();
+    result(output, 1);
+    expect(output.stderr).toContain("EISDIR");
+    if (phase === "credential") {
+      expect(output.stderr).toContain(
+        "Could not finish storing the vault credential:"
+      );
+      expect(await box.keychain()).toEqual({});
+      expect(await Bun.file(configPath(box, "config.json")).exists()).toBe(
+        false
+      );
+    } else {
+      expect(output.stderr).toContain(blockedPath);
+      expect(output.stderr).toContain(
+        "Key stored in the OS keychain, but could not remember the vault URL:"
+      );
+      const key = await storedKey(box);
+      expect(key).toMatch(/^jv_/u);
+      expect(output.stderr).not.toContain(key ?? "missing");
+    }
+    expect(output.stderr).not.toContain("Logged in to");
+  },
+  15_000
+);
+
 test.each(["denied", "expired"] as const)(
   "%s login stores nothing",
   async (status) => {
@@ -391,6 +430,13 @@ test("URL precedence, normalization, usage errors and help (table driven)", asyn
     { args: ["login", "--help"], code: 0, message: "Usage:", help: true },
     {
       args: ["--help"],
+      testKeychain: "",
+      code: 0,
+      message: "Usage:",
+      help: true,
+    },
+    {
+      args: ["--help"],
       testKeychain: "relative/path",
       code: 2,
       message: "Invalid JV_TEST_KEYCHAIN",
@@ -417,7 +463,11 @@ test("URL precedence, normalization, usage errors and help (table driven)", asyn
         }
       );
       expect(output.exitCode).toBe(entry.code);
-      expect(output.stderr).toContain(warning);
+      if (entry.testKeychain === "") {
+        expect(output.stderr).toBe("");
+      } else {
+        expect(output.stderr).toContain(warning);
+      }
       expect(entry.help ? output.stdout : output.stderr).toContain(
         entry.message
       );
@@ -524,6 +574,7 @@ test("ten-second network timeout applies to opening and polling", async () => {
       const server = Bun.serve({
         hostname: "127.0.0.1",
         port: 0,
+        idleTimeout: 0,
         fetch: (request) => {
           if (
             phase === "poll" &&

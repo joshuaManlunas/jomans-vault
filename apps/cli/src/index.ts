@@ -18,7 +18,7 @@ Flags:
   --help         Show this help`;
 
 const main = async (): Promise<number> => {
-  if (process.env.JV_TEST_KEYCHAIN !== undefined) {
+  if (process.env.JV_TEST_KEYCHAIN) {
     console.error(
       "warning: JV_TEST_KEYCHAIN is set; using a test keychain instead of the OS keychain. Never set it outside tests."
     );

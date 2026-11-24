@@ -122,9 +122,11 @@ export const login = async ({
   let location;
   try {
     location = await credentials.set(url, result.key);
-    await writeRememberedUrl(env, url);
-  } catch {
-    throw new Error("Could not store the vault credential or remembered URL.");
+  } catch (error) {
+    throw new Error(
+      `Could not finish storing the vault credential: ${error instanceof Error ? error.message : "Unknown storage error."}`,
+      { cause: error }
+    );
   }
   if (location.kind === "file") {
     console.error(
@@ -133,6 +135,14 @@ export const login = async ({
   }
   const destination =
     location.kind === "keychain" ? "the OS keychain" : location.path;
+  try {
+    await writeRememberedUrl(env, url);
+  } catch (error) {
+    throw new Error(
+      `Key stored in ${destination}, but could not remember the vault URL: ${error instanceof Error ? error.message : "Unknown storage error."}`,
+      { cause: error }
+    );
+  }
   console.error(`Logged in to ${url}. Key stored in ${destination}.`);
   return 0;
 };
