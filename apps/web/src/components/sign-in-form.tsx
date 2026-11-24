@@ -7,10 +7,17 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { authClient } from "@/lib/auth-client";
+import { safeReturnPath } from "@/lib/return-path";
 
 import Loader from "./loader";
 
-const SignInForm = ({ onSwitchToSignUp }: { onSwitchToSignUp: () => void }) => {
+const SignInForm = ({
+  onSwitchToSignUp,
+  redirect,
+}: {
+  onSwitchToSignUp: () => void;
+  redirect?: string;
+}) => {
   const navigate = useNavigate({
     from: "/",
   });
@@ -30,7 +37,7 @@ const SignInForm = ({ onSwitchToSignUp }: { onSwitchToSignUp: () => void }) => {
         {
           onSuccess: () => {
             navigate({
-              to: "/projects",
+              href: safeReturnPath(redirect),
             });
             toast.success("Sign in successful");
           },
