@@ -6,6 +6,7 @@ const Header = () => {
   const links = [
     { to: "/", label: "Home" },
     { to: "/projects", label: "Projects" },
+    { to: "/settings/api-keys", label: "API keys" },
   ] as const;
 
   return (
