@@ -38,7 +38,7 @@ secret             id, environmentId → environment, key ("DATABASE_URL"), kind
 secret_version     id, secretId → secret, version (int, monotonic per secret), ciphertext (bytea), iv (bytea),
                    createdByType ("user" | "apiKey"), createdById, createdAt
 project_key        id, projectId → project, wrappedDek (bytea), iv, kekVersion, createdAt, retiredAt
-audit_event        id, projectId, environmentId?, secretId?, action ("secret.read" | "secret.reveal" |
+audit_event        id, projectId?, apiKeyId?, environmentId?, secretId?, action ("secret.read" | "secret.reveal" |
                    "secret.export" | "secret.write" | "secret.delete" | "apikey.create" | …), actorType, actorId,
                    ip, userAgent, createdAt   -- never the value
 ```

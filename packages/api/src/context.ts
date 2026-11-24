@@ -77,6 +77,7 @@ const authenticate = async (
 export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 export interface Context {
+  auth: Auth;
   db: Database | Transaction;
   principal: Principal | null;
   masterKey: Uint8Array;
@@ -97,6 +98,7 @@ export const createContext = async ({
 }): Promise<Context> => {
   const principal = await authenticate(auth, headers);
   return {
+    auth,
     db,
     masterKey,
     ip:

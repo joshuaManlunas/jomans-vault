@@ -129,7 +129,8 @@ export const auditEvent = pgTable(
     id: text("id")
       .primaryKey()
       .$defaultFn(() => crypto.randomUUID()),
-    projectId: text("project_id").notNull(),
+    projectId: text("project_id"),
+    apiKeyId: text("api_key_id"),
     environmentId: text("environment_id"),
     secretId: text("secret_id"),
     action: text("action").notNull(),
