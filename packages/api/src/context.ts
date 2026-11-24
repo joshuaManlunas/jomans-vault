@@ -2,7 +2,7 @@ import type { Auth, Session } from "@jomans-vault/auth";
 import type { Database } from "@jomans-vault/db";
 import * as z from "zod";
 
-export type KeyPermission = "read" | "reveal" | "inject";
+export type KeyPermission = "read" | "reveal" | "inject" | "write" | "delete";
 
 export interface ApiKeyScope {
   projects: Record<string, string[]>;
@@ -18,12 +18,23 @@ export type Principal =
       permissions: KeyPermission[];
     };
 
+export const principalActor = (
+  principal: Principal
+): { type: Principal["type"]; id: string } => ({
+  type: principal.type,
+  id: principal.type === "user" ? principal.user.id : principal.keyId,
+});
+
 const scopeSchema = z.object({
   projects: z.record(z.string(), z.array(z.string())),
 });
 const permissionsSchema = z.object({ secrets: z.array(z.unknown()) });
 const isKeyPermission = (value: unknown): value is KeyPermission =>
-  value === "read" || value === "reveal" || value === "inject";
+  value === "read" ||
+  value === "reveal" ||
+  value === "inject" ||
+  value === "write" ||
+  value === "delete";
 
 const bearerPattern = /^Bearer\s+(?<key>.*)$/iu;
 

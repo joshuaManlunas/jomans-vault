@@ -1,6 +1,7 @@
 import { auditEvent } from "@jomans-vault/db/schema/vault";
 
 import type { Context, Principal } from "../context";
+import { principalActor } from "../context";
 import { o } from "../index";
 
 export type AuditAction =
@@ -31,14 +32,12 @@ export const recordAuditEvent = async (
   action: AuditAction,
   target: AuditTarget | ApiKeyAuditTarget
 ): Promise<void> => {
+  const actor = principalActor(context.principal);
   await db.insert(auditEvent).values({
     ...target,
     action,
-    actorType: context.principal.type,
-    actorId:
-      context.principal.type === "user"
-        ? context.principal.user.id
-        : context.principal.keyId,
+    actorType: actor.type,
+    actorId: actor.id,
     ip: context.ip,
     userAgent: context.userAgent,
   });
