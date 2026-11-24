@@ -125,30 +125,26 @@ export const apiKeysRouter = {
           throw new ORPCError("BAD_REQUEST");
         }
       }
+      const created = await context.auth.api.createApiKey({
+        body: {
+          userId,
+          name: input.name,
+          ...(input.expiresIn === undefined
+            ? {}
+            : { expiresIn: input.expiresIn }),
+          metadata: input.scope,
+          permissions: { secrets: input.permissions },
+        },
+      });
       try {
-        const created = await context.auth.api.createApiKey({
-          body: {
-            userId,
-            name: input.name,
-            ...(input.expiresIn === undefined
-              ? {}
-              : { expiresIn: input.expiresIn }),
-            metadata: input.scope,
-            permissions: { secrets: input.permissions },
-          },
+        await recordAuditEvent(context.db, context, "apikey.create", {
+          apiKeyId: created.id,
         });
-        try {
-          await recordAuditEvent(context.db, context, "apikey.create", {
-            apiKeyId: created.id,
-          });
-        } catch {
-          await context.db.delete(apikey).where(eq(apikey.id, created.id));
-          throw new ORPCError("INTERNAL_SERVER_ERROR");
-        }
-        return { ...summarize(created), key: created.key };
-      } catch {
-        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      } catch (error) {
+        await context.db.delete(apikey).where(eq(apikey.id, created.id));
+        throw error;
       }
+      return { ...summarize(created), key: created.key };
     }),
   list: userProcedure
     .route({ method: "GET", path: "/api-keys" })
