@@ -11,6 +11,7 @@
     "db:seed-reviewer": "bun run src/seed-reviewer-cli.ts"
   },
   "dependencies": {
+    "@better-auth/api-key": "1.7.12",
     "@better-auth/core": "1.7.12",
     "@better-auth/drizzle-adapter": "1.7.12",
     "@jomans-vault/db": "workspace:*",

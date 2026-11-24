@@ -1,6 +1,6 @@
 import type { RouterClient } from "@orpc/server";
 
-import { authedProcedure, publicProcedure } from "../index";
+import { userProcedure, publicProcedure } from "../index";
 import { environmentsRouter } from "./environments";
 import { projectsRouter } from "./projects";
 import { secretsRouter } from "./secrets";
@@ -12,7 +12,7 @@ export const appRouter = {
   healthCheck: publicProcedure
     .route({ method: "GET", path: "/health" })
     .handler(() => "OK"),
-  privateData: authedProcedure
+  privateData: userProcedure
     .route({ method: "GET", path: "/private-data" })
     .handler(({ context }) => ({
       message: "This is private",

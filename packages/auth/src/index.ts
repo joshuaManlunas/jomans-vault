@@ -1,3 +1,4 @@
+import { apiKey } from "@better-auth/api-key";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter/relations-v2";
 import type { Database } from "@jomans-vault/db";
 import * as schema from "@jomans-vault/db/schema/auth";
@@ -19,7 +20,23 @@ export const createAuth = (env: AuthConfig, database: Database) =>
     emailAndPassword: { enabled: true },
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
-    plugins: [tanstackStartCookies()],
+    disabledPaths: [
+      "/api-key/create",
+      "/api-key/list",
+      "/api-key/get",
+      "/api-key/update",
+      "/api-key/delete",
+    ],
+    plugins: [
+      apiKey({
+        defaultPrefix: "jv_",
+        enableMetadata: true,
+        permissions: { defaultPermissions: { secrets: ["read"] } },
+        rateLimit: { enabled: false },
+        enableSessionForAPIKeys: false,
+      }),
+      tanstackStartCookies(),
+    ],
   });
 
 export type Auth = ReturnType<typeof createAuth>;

@@ -3,7 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { asc, eq } from "drizzle-orm";
 import * as z from "zod";
 
-import { authedProcedure } from "../index";
+import { userProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
 import { isUniqueViolation, slug } from "./validation";
@@ -20,7 +20,7 @@ const auditTarget = ({ output }: { output: unknown }) => {
 };
 
 export const environmentsRouter = {
-  create: authedProcedure
+  create: userProcedure
     .route({
       method: "POST",
       path: "/projects/{project}/envs",
@@ -28,7 +28,10 @@ export const environmentsRouter = {
     })
     .input(z.object({ project: slug, slug }))
     .output(environmentOutput)
-    .use(requireScope, (input) => ({ project: input.project }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      permission: "read" as const,
+    }))
     .use(audit("environment.create", auditTarget))
     .handler(async ({ context, input }) => {
       let createdEnvironment;
@@ -48,11 +51,14 @@ export const environmentsRouter = {
       }
       return createdEnvironment;
     }),
-  list: authedProcedure
+  list: userProcedure
     .route({ method: "GET", path: "/projects/{project}/envs" })
     .input(z.object({ project: slug }))
     .output(z.array(environmentOutput))
-    .use(requireScope, (input) => ({ project: input.project }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      permission: "read" as const,
+    }))
     .handler(
       async ({ context }) =>
         await context.db
@@ -61,7 +67,7 @@ export const environmentsRouter = {
           .where(eq(environment.projectId, context.project.id))
           .orderBy(asc(environment.slug))
     ),
-  delete: authedProcedure
+  delete: userProcedure
     .route({
       method: "DELETE",
       path: "/projects/{project}/envs/{env}",
@@ -73,7 +79,11 @@ export const environmentsRouter = {
         // A 204 response discards the internal audit target.
       })
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .use(audit("environment.delete", auditTarget))
     .handler(async ({ context }) => {
       if (!context.environment) {

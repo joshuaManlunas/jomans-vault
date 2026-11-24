@@ -15,7 +15,7 @@ import * as z from "zod";
 
 import type { Context } from "../context";
 import { DotenvValueError, formatDotenv } from "../dotenv";
-import { authedProcedure } from "../index";
+import { authedProcedure, userProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
 import { isUniqueViolation, secretKey, slug } from "./validation";
@@ -132,7 +132,11 @@ export const secretsRouter = {
         z.file().mime("text/plain; charset=utf-8"),
       ])
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "inject" as const,
+    }))
     .use(
       audit("secret.export", ({ context }) => {
         if (!(context.project && context.environment)) {
@@ -210,7 +214,11 @@ export const secretsRouter = {
         })
       )
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .handler(async ({ context }) => {
       if (!context.environment) {
         throw new ORPCError("NOT_FOUND");
@@ -232,7 +240,7 @@ export const secretsRouter = {
         )
         .orderBy(asc(secret.key));
     }),
-  delete: authedProcedure
+  delete: userProcedure
     .route({
       method: "DELETE",
       path: "/projects/{project}/envs/{env}/secrets/{key}",
@@ -250,7 +258,11 @@ export const secretsRouter = {
           // A 204 response discards the internal audit target.
         })
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .use(audit("secret.delete", auditTarget))
     .handler(async ({ context, input }) => {
       if (!context.environment) {
@@ -291,7 +303,11 @@ export const secretsRouter = {
         })
       )
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .handler(async ({ context, input }) => {
       if (!context.environment) {
         throw new ORPCError("NOT_FOUND");
@@ -325,7 +341,7 @@ export const secretsRouter = {
         .where(eq(secretVersion.secretId, row.id))
         .orderBy(asc(secretVersion.version));
     }),
-  set: authedProcedure
+  set: userProcedure
     .route({
       method: "PUT",
       path: "/projects/{project}/envs/{env}/secrets/{key}",
@@ -345,7 +361,11 @@ export const secretsRouter = {
         updatedAt: z.date().transform((date) => date.toISOString()),
       })
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .use(audit("secret.write", auditTarget))
     .handler(async ({ context, input }) => {
       if (!context.environment) {
@@ -410,14 +430,18 @@ export const secretsRouter = {
         secretId: row.id,
       };
     }),
-  patch: authedProcedure
+  patch: userProcedure
     .route({
       method: "PATCH",
       path: "/projects/{project}/envs/{env}/secrets/{key}",
     })
     .input(pathInput.extend({ value, expectedVersion: versionNumber }))
     .output(writeOutput)
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .use(audit("secret.write", auditTarget))
     .handler(async ({ context, input }) => {
       if (!context.environment) {
@@ -457,14 +481,18 @@ export const secretsRouter = {
         projectId: context.project.id,
       };
     }),
-  rollback: authedProcedure
+  rollback: userProcedure
     .route({
       method: "POST",
       path: "/projects/{project}/envs/{env}/secrets/{key}/rollback",
     })
     .input(pathInput.extend({ version: versionNumber }))
     .output(writeOutput)
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "read" as const,
+    }))
     .use(audit("secret.rollback", auditTarget))
     .handler(async ({ context, input }) => {
       if (!context.environment) {
@@ -527,7 +555,11 @@ export const secretsRouter = {
     .output(
       z.object({ key: z.string(), value: z.string(), version: z.number() })
     )
-    .use(requireScope, (input) => ({ project: input.project, env: input.env }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      env: input.env,
+      permission: "reveal" as const,
+    }))
     .use(audit("secret.reveal", auditTarget))
     .handler(async ({ context, input }) => {
       if (!context.environment) {

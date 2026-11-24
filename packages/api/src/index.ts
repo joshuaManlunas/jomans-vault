@@ -18,3 +18,10 @@ const requireAuth = o.middleware(async ({ context, next }) => {
 });
 
 export const authedProcedure = publicProcedure.use(requireAuth);
+
+export const userProcedure = authedProcedure.use(async ({ context, next }) => {
+  if (context.principal.type !== "user") {
+    throw new ORPCError("FORBIDDEN");
+  }
+  return await next({ context: { principal: context.principal } });
+});

@@ -1,10 +1,67 @@
 import type { Auth, Session } from "@jomans-vault/auth";
 import type { Database } from "@jomans-vault/db";
+import * as z from "zod";
 
-export interface Principal {
-  type: "user";
-  user: Session["user"];
+export type KeyPermission = "read" | "reveal" | "inject";
+
+export interface ApiKeyScope {
+  projects: Record<string, string[]>;
 }
+
+export type Principal =
+  | { type: "user"; user: Session["user"] }
+  | {
+      type: "apiKey";
+      keyId: string;
+      userId: string;
+      scope: ApiKeyScope;
+      permissions: KeyPermission[];
+    };
+
+const scopeSchema = z.object({
+  projects: z.record(z.string(), z.array(z.string())),
+});
+const permissionsSchema = z.object({ secrets: z.array(z.unknown()) });
+const isKeyPermission = (value: unknown): value is KeyPermission =>
+  value === "read" || value === "reveal" || value === "inject";
+
+const bearerPattern = /^Bearer\s+(?<key>.*)$/iu;
+
+const authenticate = async (
+  auth: Auth,
+  headers: Headers
+): Promise<Principal | null> => {
+  const authorization = headers.get("Authorization");
+  const bearerKey = authorization?.match(bearerPattern)?.groups?.key?.trim();
+  const headerKey = headers.get("x-api-key")?.trim();
+  if (bearerKey && headerKey && bearerKey !== headerKey) {
+    return null;
+  }
+  const key = bearerKey || headerKey;
+  if (key) {
+    try {
+      const result = await auth.api.verifyApiKey({ body: { key } });
+      if (!(result.valid && result.key)) {
+        return null;
+      }
+      const scope = scopeSchema.safeParse(result.key.metadata);
+      const permissions = permissionsSchema.safeParse(result.key.permissions);
+      return {
+        type: "apiKey",
+        keyId: result.key.id,
+        userId: result.key.referenceId,
+        scope: scope.success ? scope.data : { projects: {} },
+        permissions: permissions.success
+          ? permissions.data.secrets.filter(isKeyPermission)
+          : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+  const session = await auth.api.getSession({ headers });
+  return session ? { type: "user", user: session.user } : null;
+};
 
 export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -27,7 +84,7 @@ export const createContext = async ({
   headers: Headers;
   masterKey: Uint8Array;
 }): Promise<Context> => {
-  const session = await auth.api.getSession({ headers });
+  const principal = await authenticate(auth, headers);
   return {
     db,
     masterKey,
@@ -36,6 +93,6 @@ export const createContext = async ({
       headers.get("X-Real-IP") ??
       null,
     userAgent: headers.get("User-Agent"),
-    principal: session ? { type: "user", user: session.user } : null,
+    principal,
   };
 };

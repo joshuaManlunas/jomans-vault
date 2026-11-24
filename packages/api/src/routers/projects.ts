@@ -4,7 +4,7 @@ import { ORPCError } from "@orpc/server";
 import { asc, eq } from "drizzle-orm";
 import * as z from "zod";
 
-import { authedProcedure } from "../index";
+import { userProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
 import { isUniqueViolation, slug } from "./validation";
@@ -22,7 +22,7 @@ const auditTarget = ({ output }: { output: unknown }) => ({
 });
 
 export const projectsRouter = {
-  create: authedProcedure
+  create: userProcedure
     .route({ method: "POST", path: "/projects", successStatus: 201 })
     .input(z.object({ slug, name }))
     .output(projectOutput)
@@ -52,7 +52,7 @@ export const projectsRouter = {
       });
       return createdProject;
     }),
-  list: authedProcedure
+  list: userProcedure
     .route({ method: "GET", path: "/projects" })
     .output(z.array(projectOutput))
     .handler(
@@ -63,11 +63,14 @@ export const projectsRouter = {
           .where(eq(project.ownerId, context.principal.user.id))
           .orderBy(asc(project.slug))
     ),
-  rename: authedProcedure
+  rename: userProcedure
     .route({ method: "PATCH", path: "/projects/{project}" })
     .input(z.object({ project: slug, name }))
     .output(projectOutput)
-    .use(requireScope, (input) => ({ project: input.project }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      permission: "read" as const,
+    }))
     .handler(async ({ context, input }) => {
       const [renamed] = await context.db
         .update(project)
@@ -79,7 +82,7 @@ export const projectsRouter = {
       }
       return renamed;
     }),
-  delete: authedProcedure
+  delete: userProcedure
     .route({
       method: "DELETE",
       path: "/projects/{project}",
@@ -91,7 +94,10 @@ export const projectsRouter = {
         // A 204 response discards the internal audit target.
       })
     )
-    .use(requireScope, (input) => ({ project: input.project }))
+    .use(requireScope, (input) => ({
+      project: input.project,
+      permission: "read" as const,
+    }))
     .use(audit("project.delete", auditTarget))
     .handler(async ({ context }) => {
       const [deleted] = await context.db
