@@ -14,8 +14,9 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import * as z from "zod";
 
 import type { Context } from "../context";
+import { principalActor } from "../context";
 import { DotenvValueError, formatDotenv } from "../dotenv";
-import { authedProcedure, userProcedure } from "../index";
+import { authedProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
 import { isUniqueViolation, secretKey, slug } from "./validation";
@@ -73,7 +74,7 @@ const appendVersion = async (
   context: Context,
   secretId: string,
   encrypted: { ciphertext: Uint8Array; iv: Uint8Array },
-  actorId: string
+  actor: ReturnType<typeof principalActor>
 ) => {
   const [next] = await context.db
     .select({
@@ -91,8 +92,8 @@ const appendVersion = async (
       version: next.version,
       ciphertext: Buffer.from(encrypted.ciphertext),
       iv: Buffer.from(encrypted.iv),
-      createdByType: "user",
-      createdById: actorId,
+      createdByType: actor.type,
+      createdById: actor.id,
     })
     .returning({ id: secretVersion.id });
   if (!created) {
@@ -240,7 +241,7 @@ export const secretsRouter = {
         )
         .orderBy(asc(secret.key));
     }),
-  delete: userProcedure
+  delete: authedProcedure
     .route({
       method: "DELETE",
       path: "/projects/{project}/envs/{env}/secrets/{key}",
@@ -261,7 +262,7 @@ export const secretsRouter = {
     .use(requireScope, (input) => ({
       project: input.project,
       env: input.env,
-      permission: "read" as const,
+      permission: "delete" as const,
     }))
     .use(audit("secret.delete", auditTarget))
     .handler(async ({ context, input }) => {
@@ -341,7 +342,7 @@ export const secretsRouter = {
         .where(eq(secretVersion.secretId, row.id))
         .orderBy(asc(secretVersion.version));
     }),
-  set: userProcedure
+  set: authedProcedure
     .route({
       method: "PUT",
       path: "/projects/{project}/envs/{env}/secrets/{key}",
@@ -364,7 +365,7 @@ export const secretsRouter = {
     .use(requireScope, (input) => ({
       project: input.project,
       env: input.env,
-      permission: "read" as const,
+      permission: "write" as const,
     }))
     .use(audit("secret.write", auditTarget))
     .handler(async ({ context, input }) => {
@@ -405,6 +406,7 @@ export const secretsRouter = {
       if (!next) {
         throw new ORPCError("INTERNAL_SERVER_ERROR");
       }
+      const actor = principalActor(context.principal);
       const [created] = await context.db
         .insert(secretVersion)
         .values({
@@ -412,8 +414,8 @@ export const secretsRouter = {
           version: next.version,
           ciphertext: Buffer.from(encrypted.ciphertext),
           iv: Buffer.from(encrypted.iv),
-          createdByType: "user",
-          createdById: context.principal.user.id,
+          createdByType: actor.type,
+          createdById: actor.id,
         })
         .returning({ id: secretVersion.id });
       if (!created) {
@@ -430,7 +432,7 @@ export const secretsRouter = {
         secretId: row.id,
       };
     }),
-  patch: userProcedure
+  patch: authedProcedure
     .route({
       method: "PATCH",
       path: "/projects/{project}/envs/{env}/secrets/{key}",
@@ -440,7 +442,7 @@ export const secretsRouter = {
     .use(requireScope, (input) => ({
       project: input.project,
       env: input.env,
-      permission: "read" as const,
+      permission: "write" as const,
     }))
     .use(audit("secret.write", auditTarget))
     .handler(async ({ context, input }) => {
@@ -476,12 +478,12 @@ export const secretsRouter = {
           context,
           row.id,
           encrypted,
-          context.principal.user.id
+          principalActor(context.principal)
         )),
         projectId: context.project.id,
       };
     }),
-  rollback: userProcedure
+  rollback: authedProcedure
     .route({
       method: "POST",
       path: "/projects/{project}/envs/{env}/secrets/{key}/rollback",
@@ -491,7 +493,7 @@ export const secretsRouter = {
     .use(requireScope, (input) => ({
       project: input.project,
       env: input.env,
-      permission: "read" as const,
+      permission: "write" as const,
     }))
     .use(audit("secret.rollback", auditTarget))
     .handler(async ({ context, input }) => {
@@ -535,7 +537,7 @@ export const secretsRouter = {
             context,
             row.id,
             source,
-            context.principal.user.id
+            principalActor(context.principal)
           )),
           projectId: context.project.id,
         };

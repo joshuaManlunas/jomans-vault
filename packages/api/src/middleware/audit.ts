@@ -1,6 +1,7 @@
 import { auditEvent } from "@jomans-vault/db/schema/vault";
 
 import type { Context, Principal } from "../context";
+import { principalActor } from "../context";
 import { o } from "../index";
 
 export type AuditAction =
@@ -33,14 +34,12 @@ export const audit = <TOutput>(
     async ({ context, next: runHandler }) =>
       await context.db.transaction(async (transaction) => {
         const result = await runHandler({ context: { db: transaction } });
+        const actor = principalActor(context.principal);
         await transaction.insert(auditEvent).values({
           ...target({ context, output: result.output }),
           action,
-          actorType: context.principal.type,
-          actorId:
-            context.principal.type === "user"
-              ? context.principal.user.id
-              : context.principal.keyId,
+          actorType: actor.type,
+          actorId: actor.id,
           ip: context.ip,
           userAgent: context.userAgent,
         });
