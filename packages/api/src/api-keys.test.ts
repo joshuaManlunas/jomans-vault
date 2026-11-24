@@ -9,6 +9,7 @@ import {
   auditEvent,
   environment,
   project,
+  projectKey,
   secret,
   secretVersion,
 } from "@jomans-vault/db/schema/vault";
@@ -16,7 +17,7 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import * as z from "zod";
@@ -168,7 +169,7 @@ beforeAll(async () => {
     read: await createKey(["read"]),
     reveal: await createKey(["reveal"]),
     inject: await createKey(["inject"]),
-    all: await createKey(["read", "reveal", "inject"]),
+    all: await createKey(["read", "reveal", "inject", "write", "delete"]),
     other: await createKey(["read", "reveal", "inject"], scope, userB.id),
   };
 }, 30_000);
@@ -204,6 +205,7 @@ const expectError = async (
     code,
     status,
     message: {
+      CONFLICT: "Conflict",
       FORBIDDEN: "Forbidden",
       NOT_FOUND: "Not Found",
       UNAUTHORIZED: "Unauthorized",
@@ -406,7 +408,6 @@ test("all user-only routes reject even a fully scoped key before project lookup 
     ["my-app", "unowned-project"].map(async (projectSlug) => {
       const projectPath = `/projects/${projectSlug}`;
       const environmentPath = `${projectPath}/envs/development`;
-      const secretPath = `${environmentPath}/secrets/TOKEN`;
       const routes: [string, string, unknown?][] = [
         ["POST", "/projects", { slug: "blocked", name: "Blocked" }],
         ["GET", "/projects"],
@@ -415,10 +416,6 @@ test("all user-only routes reject even a fully scoped key before project lookup 
         ["POST", `${projectPath}/envs`, { slug: "blocked" }],
         ["GET", `${projectPath}/envs`],
         ["DELETE", environmentPath],
-        ["PUT", secretPath, { value: "blocked" }],
-        ["PATCH", secretPath, { value: "blocked", expectedVersion: 1 }],
-        ["DELETE", secretPath],
-        ["POST", `${secretPath}/rollback`, { version: 1 }],
         ["GET", "/private-data"],
       ];
       await Promise.all(
@@ -440,23 +437,26 @@ test("all user-only routes reject even a fully scoped key before project lookup 
 
 test("RPC uses the same key permission boundary", async () => {
   const rpcHandler = new RPCHandler(appRouter);
-  const link = new RPCLink({
-    url: `${baseURL}/api/rpc`,
-    headers: { "x-api-key": keys.all.key, cookie: userA.cookie },
-    fetch: async (rpcRequest) => {
-      const { response } = await rpcHandler.handle(rpcRequest, {
-        prefix: "/api/rpc",
-        context: await createContext({
-          db,
-          auth,
-          headers: rpcRequest.headers,
-          masterKey: keyBytes,
-        }),
-      });
-      return response ?? new Response("Not found", { status: 404 });
-    },
-  });
-  const client: RouterClient<typeof appRouter> = createORPCClient(link);
+  const rpcClient = (key: string): RouterClient<typeof appRouter> =>
+    createORPCClient(
+      new RPCLink({
+        url: `${baseURL}/api/rpc`,
+        headers: { "x-api-key": key, cookie: userA.cookie },
+        fetch: async (rpcRequest) => {
+          const { response } = await rpcHandler.handle(rpcRequest, {
+            prefix: "/api/rpc",
+            context: await createContext({
+              db,
+              auth,
+              headers: rpcRequest.headers,
+              masterKey: keyBytes,
+            }),
+          });
+          return response ?? new Response("Not found", { status: 404 });
+        },
+      })
+    );
+  const client = rpcClient(keys.read.key);
   await expect(client.projects.list()).rejects.toMatchObject({
     code: "FORBIDDEN",
   });
@@ -471,6 +471,20 @@ test("RPC uses the same key permission boundary", async () => {
   expect(
     await client.secrets.list({ project: "my-app", env: "development" })
   ).toMatchObject([{ key: "TOKEN", version: 1 }]);
+  const writer = await createKey(["write"]);
+  expect(
+    await rpcClient(writer.key).secrets.set({
+      project: "my-app",
+      env: "development",
+      key: "RPC_WRITE",
+      value: "rpc-private-value",
+    })
+  ).toEqual({
+    key: "RPC_WRITE",
+    kind: "secret",
+    version: 1,
+    updatedAt: expect.any(String),
+  });
 });
 
 test("reveal and export audit the key id and request metadata, while list and history write nothing", async () => {
@@ -574,7 +588,7 @@ test("unknown permissions are discarded and do not grant reveal or inject", asyn
     keyId: key.id,
     userId: userA.id,
     scope,
-    permissions: ["read"],
+    permissions: ["read", "write", "delete"],
   });
   const response = await keyRequest(key.key);
   expect(response.status).toBe(200);
@@ -619,5 +633,394 @@ test("an unrelated authorization scheme and empty key sources preserve cookie se
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ user: { id: userA.id } });
     })
+  );
+});
+
+const mutationRoutes = [
+  {
+    method: "PUT",
+    suffix: "",
+    body: { value: "key-written-value" },
+    permission: "write",
+    status: 200,
+  },
+  {
+    method: "PATCH",
+    suffix: "",
+    body: { value: "key-updated-value", expectedVersion: 1 },
+    permission: "write",
+    status: 200,
+  },
+  {
+    method: "POST",
+    suffix: "/rollback",
+    body: { version: 1 },
+    permission: "write",
+    status: 200,
+  },
+  {
+    method: "DELETE",
+    suffix: "",
+    body: undefined,
+    permission: "delete",
+    status: 204,
+  },
+] as const;
+const allPermissions = ["read", "reveal", "inject", "write", "delete"];
+
+const seedSecret = async () => {
+  const key = `MUTATION_${crypto.randomUUID().replaceAll("-", "").toUpperCase()}`;
+  const path = `${listPath}/${key}`;
+  const response = await request(
+    "PUT",
+    path,
+    { cookie: userA.cookie },
+    {
+      value: "user-written-value",
+    }
+  );
+  expect(response.status).toBe(200);
+  return { key, path };
+};
+
+test.each(
+  mutationRoutes.flatMap((route) => [
+    {
+      ...route,
+      permissions: [route.permission],
+      permissionCase: "required permission",
+      expected: route.status,
+    },
+    {
+      ...route,
+      permissions: allPermissions.filter(
+        (permission) => permission !== route.permission
+      ),
+      permissionCase: "every other permission",
+      expected: 403,
+    },
+    {
+      ...route,
+      permissions: [route.permission === "write" ? "delete" : "write"],
+      permissionCase: "opposite mutation permission",
+      expected: 403,
+    },
+  ])
+)(
+  "$method with $permissionCase returns $expected",
+  async ({ method, suffix, body, permissions, expected }) => {
+    const { key: secretKey, path } = await seedSecret();
+    const key = await createKey(permissions);
+    const before = await snapshotVault();
+    const response = await keyRequest(
+      key.key,
+      `${path}${suffix}`,
+      method,
+      body
+    );
+    if (expected === 403) {
+      await expectError(response, 403, "FORBIDDEN");
+      expect(await snapshotVault()).toEqual(before);
+      return;
+    }
+    expect(response.status).toBe(expected);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    if (method === "DELETE") {
+      expect(await response.text()).toBe("");
+      const list = await keyRequest(keys.read.key);
+      expect(list.status).toBe(200);
+      expect(await list.json()).not.toContainEqual(
+        expect.objectContaining({ key: secretKey })
+      );
+      return;
+    }
+    const output = await response.json();
+    expect(output).toEqual({
+      key: secretKey,
+      kind: "secret",
+      version: 2,
+      updatedAt: expect.any(String),
+    });
+  }
+);
+
+test.each(
+  mutationRoutes.flatMap((route) => [
+    {
+      ...route,
+      scopeCase: "owned out-of-scope env",
+      projectSlug: "my-app",
+      env: "production",
+      user: "owner",
+      status: 403,
+    },
+    {
+      ...route,
+      scopeCase: "owned out-of-scope project",
+      projectSlug: "other-app",
+      env: "development",
+      user: "owner",
+      status: 403,
+    },
+    {
+      ...route,
+      scopeCase: "other owner's project named in scope",
+      projectSlug: "my-app",
+      env: "development",
+      user: "other",
+      status: 404,
+    },
+    {
+      ...route,
+      scopeCase: "in-scope missing env",
+      projectSlug: "my-app",
+      env: "missing",
+      user: "owner",
+      status: 404,
+    },
+  ])
+)(
+  "$method refuses $scopeCase without changing rows",
+  async ({
+    method,
+    suffix,
+    body,
+    permission,
+    projectSlug,
+    env,
+    user,
+    status,
+  }) => {
+    const key = await createKey(
+      [permission],
+      scope,
+      user === "owner" ? userA.id : userB.id
+    );
+    const before = await snapshotVault();
+    const path = `/projects/${projectSlug}/envs/${env}/secrets/TOKEN${suffix}`;
+    await expectError(
+      await keyRequest(key.key, path, method, body),
+      status,
+      status === 403 ? "FORBIDDEN" : "NOT_FOUND"
+    );
+    expect(await snapshotVault()).toEqual(before);
+  }
+);
+
+test("write alone creates secrets without granting reveal or inject", async () => {
+  const key = await createKey(["write"]);
+  const path = `${listPath}/WRITE_ONLY`;
+  const response = await keyRequest(key.key, path, "PUT", {
+    value: "write-only-private-value",
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    key: "WRITE_ONLY",
+    kind: "secret",
+    version: 1,
+    updatedAt: expect.any(String),
+  });
+  await Promise.all(
+    [path, `${envPath}/export`].map(async (readPath) => {
+      await expectError(await keyRequest(key.key, readPath), 403, "FORBIDDEN");
+    })
+  );
+});
+
+test("key mutations attribute every version and audit event without exposing values or credentials", async () => {
+  const key = await createKey(["write", "delete"]);
+  const { key: secretKey, path } = await seedSecret();
+  const mutations = [
+    {
+      method: "PUT",
+      suffix: "",
+      body: { value: "audit-set-private-value" },
+      action: "secret.write",
+      version: 2,
+    },
+    {
+      method: "PATCH",
+      suffix: "",
+      body: { value: "audit-patch-private-value", expectedVersion: 2 },
+      action: "secret.write",
+      version: 3,
+    },
+    {
+      method: "POST",
+      suffix: "/rollback",
+      body: { version: 1 },
+      action: "secret.rollback",
+      version: 4,
+    },
+    {
+      method: "DELETE",
+      suffix: "",
+      body: undefined,
+      action: "secret.delete",
+      version: undefined,
+    },
+  ];
+  /* oxlint-disable no-await-in-loop -- Each mutation depends on the preceding version and has its own audit assertion. */
+  for (const [index, mutation] of mutations.entries()) {
+    const response = await keyRequest(
+      key.key,
+      `${path}${mutation.suffix}`,
+      mutation.method,
+      mutation.body
+    );
+    expect(response.status).toBe(mutation.version === undefined ? 204 : 200);
+    if (mutation.version === undefined) {
+      expect(await response.text()).toBe("");
+    } else {
+      expect(await response.json()).toEqual({
+        key: secretKey,
+        kind: "secret",
+        version: mutation.version,
+        updatedAt: expect.any(String),
+      });
+    }
+    const events = await db
+      .select()
+      .from(auditEvent)
+      .where(eq(auditEvent.actorId, key.id));
+    expect(events).toHaveLength(index + 1);
+    expect(events.map((event) => event.action).toSorted()).toEqual(
+      mutations
+        .slice(0, index + 1)
+        .map((event) => event.action)
+        .toSorted()
+    );
+    for (const event of events) {
+      expect(event).toMatchObject({
+        actorType: "apiKey",
+        actorId: key.id,
+        ip: "192.0.2.10",
+        userAgent: "Scoped key test",
+      });
+      for (const sensitive of [
+        "user-written-value",
+        "audit-set-private-value",
+        "audit-patch-private-value",
+        key.key,
+      ]) {
+        expect(JSON.stringify(event)).not.toContain(sensitive);
+      }
+    }
+  }
+  /* oxlint-enable no-await-in-loop */
+  const versions = await keyRequest(keys.read.key, `${path}/versions`);
+  expect(versions.status).toBe(200);
+  expect(await versions.json()).toEqual(
+    [1, 2, 3, 4].map((version) => ({
+      version,
+      createdByType: version === 1 ? "user" : "apiKey",
+      createdById: version === 1 ? userA.id : key.id,
+      createdAt: expect.any(String),
+    }))
+  );
+});
+
+test("stale key updates and missing mutation targets leave the vault unchanged", async () => {
+  const key = await createKey(["write", "delete"]);
+  const { path } = await seedSecret();
+  const failures: [string, string, unknown, number, string][] = [
+    ["PATCH", path, { value: "stale", expectedVersion: 2 }, 409, "CONFLICT"],
+    [
+      "PATCH",
+      `${listPath}/ABSENT_MUTATION`,
+      { value: "missing", expectedVersion: 1 },
+      404,
+      "NOT_FOUND",
+    ],
+    ["DELETE", `${listPath}/ABSENT_MUTATION`, undefined, 404, "NOT_FOUND"],
+    [
+      "POST",
+      `${listPath}/ABSENT_MUTATION/rollback`,
+      { version: 1 },
+      404,
+      "NOT_FOUND",
+    ],
+    ["POST", `${path}/rollback`, { version: 999 }, 404, "NOT_FOUND"],
+  ];
+  const before = await snapshotVault();
+  await Promise.all(
+    failures.map(async ([method, target, body, status, code]) => {
+      await expectError(
+        await keyRequest(key.key, target, method, body),
+        status,
+        code
+      );
+    })
+  );
+  expect(await snapshotVault()).toEqual(before);
+});
+
+test("write-only rollback restores a key-deleted secret by copying ciphertext without a decryption key", async () => {
+  const writer = await createKey(["write"]);
+  const deleter = await createKey(["delete"]);
+  const { key, path } = await seedSecret();
+  const [row] = await db.select().from(secret).where(eq(secret.key, key));
+  expect(row).toBeDefined();
+  if (!row) {
+    throw new Error("Seeded secret not found");
+  }
+  const [source] = await db
+    .select()
+    .from(secretVersion)
+    .where(eq(secretVersion.secretId, row.id));
+  expect(source).toBeDefined();
+  const deleted = await keyRequest(deleter.key, path, "DELETE");
+  expect(deleted.status).toBe(204);
+  const list = await keyRequest(keys.read.key);
+  expect(await list.json()).not.toContainEqual(
+    expect.objectContaining({ key })
+  );
+  const [ownedKey] = await db
+    .select({ dataKey: projectKey })
+    .from(projectKey)
+    .innerJoin(project, eq(projectKey.projectId, project.id))
+    .where(and(eq(project.slug, "my-app"), eq(project.ownerId, userA.id)));
+  const dataKey = ownedKey?.dataKey;
+  if (!dataKey) {
+    throw new Error("Seeded project data key not found");
+  }
+  // Retiring the DEK makes decryption unavailable; rollback must only copy stored bytes.
+  await db
+    .update(projectKey)
+    .set({ retiredAt: new Date() })
+    .where(eq(projectKey.id, dataKey.id));
+  let restored: Response;
+  try {
+    restored = await keyRequest(writer.key, `${path}/rollback`, "POST", {
+      version: 1,
+    });
+  } finally {
+    await db
+      .update(projectKey)
+      .set({ retiredAt: null })
+      .where(eq(projectKey.id, dataKey.id));
+  }
+  expect(restored.status).toBe(200);
+  expect(await restored.json()).toEqual({
+    key,
+    kind: "secret",
+    version: 2,
+    updatedAt: expect.any(String),
+  });
+  const versions = await db
+    .select()
+    .from(secretVersion)
+    .where(eq(secretVersion.secretId, row.id))
+    .orderBy(asc(secretVersion.version));
+  expect(versions).toHaveLength(2);
+  expect(versions[1]).toMatchObject({
+    ciphertext: source?.ciphertext,
+    iv: source?.iv,
+    createdByType: "apiKey",
+    createdById: writer.id,
+  });
+  const after = await keyRequest(keys.read.key);
+  expect(await after.json()).toContainEqual(
+    expect.objectContaining({ key, version: 2 })
   );
 });
