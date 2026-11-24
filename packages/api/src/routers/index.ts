@@ -2,12 +2,14 @@ import type { RouterClient } from "@orpc/server";
 
 import { userProcedure, publicProcedure } from "../index";
 import { apiKeysRouter } from "./api-keys";
+import { auditRouter } from "./audit";
 import { environmentsRouter } from "./environments";
 import { projectsRouter } from "./projects";
 import { secretsRouter } from "./secrets";
 
 export const appRouter = {
   apiKeys: apiKeysRouter,
+  audit: auditRouter,
   projects: projectsRouter,
   environments: environmentsRouter,
   secrets: secretsRouter,
