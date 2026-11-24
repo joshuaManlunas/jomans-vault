@@ -7,6 +7,7 @@ const Header = () => {
     { to: "/", label: "Home" },
     { to: "/projects", label: "Projects" },
     { to: "/settings/api-keys", label: "API keys" },
+    { to: "/audit", label: "Audit log" },
   ] as const;
 
   return (
