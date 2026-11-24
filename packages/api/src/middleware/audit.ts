@@ -36,8 +36,11 @@ export const audit = <TOutput>(
         await transaction.insert(auditEvent).values({
           ...target({ context, output: result.output }),
           action,
-          actorType: "user",
-          actorId: context.principal.user.id,
+          actorType: context.principal.type,
+          actorId:
+            context.principal.type === "user"
+              ? context.principal.user.id
+              : context.principal.keyId,
           ip: context.ip,
           userAgent: context.userAgent,
         });
