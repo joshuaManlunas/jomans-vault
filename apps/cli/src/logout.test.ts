@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import * as z from "zod";
 
 import { configDir } from "./config";
+import { createCredentialStore } from "./credentials";
 import {
   closedUrl,
   createSandbox,
@@ -163,6 +164,32 @@ test("logout uses the remembered URL and preserves other fallback credentials an
     "https://other.example": "keep",
   });
   expect(await readFile(config, "utf-8")).toBe(remembered);
+  await expectRevoked(key);
+});
+
+test("logout finds fallback credentials after the keychain recovers", async () => {
+  const box = await sandbox();
+  const key = await createKey();
+  const credentials = createCredentialStore({
+    ...box.env,
+    JV_TEST_KEYCHAIN: "unavailable",
+  });
+  const fallback = pathModule.join(configDir(box.env), "credentials.json");
+  expect(await credentials.set(vault.url, key.key)).toEqual({
+    kind: "file",
+    path: fallback,
+  });
+  await credentials.set("https://other.example", "keep");
+  expect(await box.keychain()).toEqual({});
+  const output = await runJv(["logout", "--url", vault.url], { env: box.env });
+  result(output, 0, key.key);
+  expect(output.stderr).toContain(
+    `Logged out of ${vault.url}. The key was revoked and removed from this machine.`
+  );
+  expect(await Bun.file(fallback).json()).toEqual({
+    "https://other.example": "keep",
+  });
+  expect(await box.keychain()).toEqual({});
   await expectRevoked(key);
 });
 

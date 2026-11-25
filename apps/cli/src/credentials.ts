@@ -98,11 +98,15 @@ export const createCredentialStore = (
   return {
     get: async (url) => {
       try {
-        return await keychain.get({ service: "jv", name: url });
+        const key = await keychain.get({ service: "jv", name: url });
+        if (key !== null) {
+          return key;
+        }
       } catch {
-        const entries = await readEntries(path);
-        return entries[url] ?? null;
+        // An unavailable OS keychain must not prevent fallback lookup.
       }
+      const entries = await readEntries(path);
+      return entries[url] ?? null;
     },
     set: async (url, key) => {
       try {
