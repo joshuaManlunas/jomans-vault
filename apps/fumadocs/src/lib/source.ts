@@ -1,19 +1,9 @@
 import { llms, loader } from "fumadocs-core/source";
 import { lucideIconsPlugin } from "fumadocs-core/source/lucide-icons";
-import { defineDocs } from "fumadocs-mdx/macro";
 
+import { docs } from "./collections";
 import { openapi } from "./openapi";
 import { docsRoute } from "./shared";
-
-export const docs = defineDocs({
-  dir: "content/docs",
-  docs: {
-    async: true,
-    postprocess: {
-      includeProcessedMarkdown: true,
-    },
-  },
-});
 
 export const source = loader(
   {

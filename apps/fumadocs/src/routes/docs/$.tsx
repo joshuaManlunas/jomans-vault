@@ -15,9 +15,10 @@ import { Suspense, use } from "react";
 
 import { APIPage } from "@/components/api-page";
 import { useMDXComponents } from "@/components/mdx";
+import { docs } from "@/lib/collections";
 import { baseOptions } from "@/lib/layout.shared";
 import { getPageImageUrl, getPageMarkdownUrl, gitConfig } from "@/lib/shared";
-import { docs, source } from "@/lib/source";
+import { source } from "@/lib/source";
 
 export const Route = createFileRoute("/docs/$")({
   component: Page,
