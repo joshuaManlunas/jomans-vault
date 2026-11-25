@@ -1,0 +1,72 @@
+# Production stack for Dokploy (Docker Compose service, compose path ./docker-compose.dokploy.yml).
+# Dokploy writes the service's Environment tab to .env next to this file; the web build reads it as
+# a BuildKit secret (Varlock validates env at build time) and every service loads it at runtime.
+# No host ports: Dokploy's Traefik routes the configured domain to web:3001.
+name: jomans-vault
+
+x-web-build: &web-build
+  context: .
+  dockerfile: apps/web/Dockerfile
+  secrets:
+    - web_env
+
+services:
+  web:
+    build: *web-build
+    init: true
+    env_file:
+      - .env
+    expose:
+      - "3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3001/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # Applies Drizzle migrations on every deploy before web starts (deploy.mdx runs this by hand).
+  migrate:
+    build: *web-build
+    env_file:
+      - .env
+    working_dir: /app/packages/db
+    command: ["npx", "drizzle-kit", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: jomans-vault
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the Dokploy environment}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d jomans-vault"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+secrets:
+  web_env:
+    file: .env
