@@ -58,26 +58,32 @@ class DoctorTests(unittest.TestCase):
         offsets = (0, 1, 2, step, step + 1, step + 2)
         # On hosts that allocate ephemeral ports in order, choose the range
         # behind the anchor so later connections do not immediately take it.
-        anchor = busy_offset if busy_offset is not None else offsets[-1]
+        anchor = offsets[-1]
         for _ in range(20):
             with ExitStack() as anchored, ExitStack() as adjacent:
-                sock = anchored.enter_context(socket.socket())
+                anchor_stack = anchored if busy_offset == anchor else adjacent
+                sock = anchor_stack.enter_context(socket.socket())
                 sock.bind((HOST, 0))
                 first_port = sock.getsockname()[1] - anchor
                 ports = [first_port + offset for offset in offsets]
                 if ports[-1] > 65535 or self.config["dashboard"]["port"] in ports:
                     continue
+                busy_sock = sock if busy_offset == anchor else None
                 try:
                     for offset in offsets:
                         if offset != anchor:
-                            adjacent.enter_context(socket.socket()).bind((HOST, first_port + offset))
+                            stack = anchored if offset == busy_offset else adjacent
+                            candidate = stack.enter_context(socket.socket())
+                            candidate.bind((HOST, first_port + offset))
+                            if offset == busy_offset:
+                                busy_sock = candidate
                 except OSError:
                     continue
                 self.config["ports"] = {"base": first_port - step * first_job, "step": step}
                 if busy_offset is not None:
-                    sock.listen()
+                    busy_sock.listen()
                     self.addCleanup(anchored.pop_all().close)
-                return first_port + anchor
+                return first_port + (busy_offset if busy_offset is not None else anchor)
         self.fail("could not find a free set of job ports")
 
     def run_doctor(self, code=0):

@@ -58,6 +58,8 @@ export default defineConfig({
     alias: {
       "@": fileURLToPath(new URL("src", import.meta.url)),
       tslib: "tslib/tslib.es6.js",
+      // Nitro selects the raw WASM export; use Shiki's bundled JS loader.
+      "shiki/wasm": "shiki/dist/wasm.mjs",
     },
   },
 });

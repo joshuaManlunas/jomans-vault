@@ -98,10 +98,13 @@ Run standalone Node/Bun tools that use Varlock from the owning app directory so 
 - Config: `docker-compose.yml` (app Dockerfiles live in `apps/*/Dockerfile`)
 - Build images: bun run docker:build
 - Start: bun run docker:up
+- Start (production): `bun run docker:up:prod` — Postgres gets no host port
 - Logs: bun run docker:logs
 - Stop: bun run docker:down
 
-The build and start scripts load `apps/web/.env` with Compose's `--env-file` option. This preserves a `VAULT_MASTER_KEY` stored only in that file when Compose resolves the service's valueless environment entry; an exported shell value takes precedence. When invoking Compose directly to build or start the web service, also pass `--env-file apps/web/.env`. Without that option or an exported key, the bare entry overrides the service's `env_file` value and the server refuses to start.
+The build and start scripts load `apps/web/.env` with Compose's `--env-file` option. This preserves a `VAULT_MASTER_KEY` stored only in that file when Compose resolves the service's environment entry; an exported shell value takes precedence. Both start scripts refuse to run when `VAULT_MASTER_KEY` is unset or empty. When invoking Compose directly to build or start the web service, also pass `--env-file apps/web/.env`; for startup, pass `-f docker-compose.yml -f docker-compose.key.yml`, adding `-f docker-compose.prod.yml` for production.
+
+See [Deploy and back up](apps/fumadocs/content/docs/deploy.mdx) for production startup, database backups and restores, and keeping a separate backup of the master key.
 
 Public variables are baked into web builds. Container networking values are overridden in `docker-compose.yml`.
 
@@ -139,6 +142,7 @@ jomans-vault/
 - `bun run check`: Run Oxlint and Oxfmt
 - `bun run docker:build`: Build the Docker Compose images
 - `bun run docker:up`: Build and start the Docker Compose stack
+- `bun run docker:up:prod`: Build and start the production stack without a Postgres host port
 - `bun run docker:logs`: Tail logs from the Docker Compose stack
 - `bun run docker:down`: Stop the Docker Compose stack
 

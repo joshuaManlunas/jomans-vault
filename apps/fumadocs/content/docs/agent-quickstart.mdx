@@ -1,0 +1,61 @@
+---
+title: Agent quickstart
+description: Inspect secret metadata with a scoped key and keep values out of agent context.
+---
+
+Use an existing vault and ask its human owner for the project and environment slugs. These examples use the [human quickstart](/docs/quickstart)'s local vault, project `my-app` and environment `development`.
+
+## Have a human create a scoped key
+
+The human opens `/settings/api-keys` in the web app and selects **New API key**. They name the key, pick only the project environments and permissions needed for the task, and select **Create API key**. The **Copy your new API key** dialog shows the key once; copy it then and provide it to the agent's runtime securely. Do not paste it into a prompt, source file or committed config.
+
+For the metadata request below, select only `my-app` / `development` and `read`. A new key defaults to `read`; it cannot reveal or inject values.
+
+## List metadata with curl
+
+Have the runtime supply the key as `JV_API_KEY`. Set the vault URL, then run:
+
+```sh
+export JV_URL=http://localhost:3001
+```
+
+```sh
+curl --fail-with-body --silent --show-error \
+  --header "Authorization: Bearer $JV_API_KEY" \
+  "$JV_URL/api/v1/projects/my-app/envs/development/secrets"
+```
+
+With the human quickstart's secret, the response has this shape (the timestamp will differ):
+
+```json
+[
+  {
+    "key": "GREETING",
+    "kind": "secret",
+    "version": 1,
+    "updatedAt": "2026-11-25T00:00:00.000Z"
+  }
+]
+```
+
+The response is an array of metadata, with no values. An empty environment returns `[]`. The REST base is `/api/v1`. Authenticate with either `Authorization: Bearer <key>` or `x-api-key: <key>`. If both headers are present and differ, authentication fails.
+
+| Status | Meaning for a key |
+| --- | --- |
+| `401` | Authentication failed: the key is missing, invalid, revoked or expired, or the two key headers conflict. |
+| `403` | The project or environment is outside the key's scope, the required permission is missing, or the route requires a user session. |
+| `404` | The project is not owned by the key's owner, or a resource is missing within the allowed scope. Scope is checked before looking up the environment, so an out-of-scope environment returns `403`. |
+
+API keys cannot list projects or environments. Get those slugs from the human; do not infer that a `403` means a resource does not exist.
+
+## Run trusted commands without reading values
+
+Ask the human to authorize a machine with `jv login` and grant `inject` for the environment if the task needs to run a command with secrets. `jv login` suggests `read` and `inject`; the read-only metadata key above cannot run this step. After linking the working directory with `jv link my-app --env development`, prefix the trusted command with `jv run --`:
+
+```sh
+jv run -- bun run dev
+```
+
+Here `bun run dev` is the command in your linked application; substitute the trusted command your task needs. Do not call `reveal` (`jv get` or `GET /api/v1/projects/my-app/envs/development/secrets/GREETING`) or call the `export` route to put secret values into your context. Keep command output free of values too.
+
+`inject` is plaintext access. Internally, `jv run` calls the environment's export route, receives plaintext and passes it to the child process without writing it to disk. `jv run` is not a security boundary: the command and anything it starts receive the values and can print, log or send them. Only trusted commands should run under it. See the [security model](/docs/security-model) before asking for more permissions.

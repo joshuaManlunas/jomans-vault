@@ -131,12 +131,15 @@ const vaultRequest = async <T>({
   );
 };
 
-export const ls = async (target: Target): Promise<number> => {
-  const rows = await vaultRequest({
+export const listSecrets = async (target: Target) =>
+  await vaultRequest({
     ...target,
     permission: "read",
     schema: z.array(metadataSchema),
   });
+
+export const ls = async (target: Target): Promise<number> => {
+  const rows = await listSecrets(target);
   if (rows.length === 0) {
     console.error(`No secrets in ${target.project}/${target.environment}.`);
     return 0;
@@ -186,6 +189,24 @@ const readStdin = (): string => {
   }
 };
 
+export const storeSecret = async (target: KeyTarget & { value: string }) => {
+  validateKey(target.key);
+  const { value } = target;
+  if (!value.isWellFormed()) {
+    throw new UsageError("The value is not valid UTF-8 text.");
+  }
+  if (Buffer.byteLength(value, "utf-8") > maxValueBytes) {
+    throw new UsageError("The value is larger than 64 KiB.");
+  }
+  return await vaultRequest({
+    ...target,
+    permission: "write",
+    method: "PUT",
+    body: { value },
+    schema: metadataSchema,
+  });
+};
+
 export const set = async (
   target: KeyTarget & { value?: string }
 ): Promise<number> => {
@@ -208,19 +229,7 @@ export const set = async (
     }
     value = entered;
   }
-  if (!value.isWellFormed()) {
-    throw new UsageError("The value is not valid UTF-8 text.");
-  }
-  if (Buffer.byteLength(value, "utf-8") > maxValueBytes) {
-    throw new UsageError("The value is larger than 64 KiB.");
-  }
-  const row = await vaultRequest({
-    ...target,
-    permission: "write",
-    method: "PUT",
-    body: { value },
-    schema: metadataSchema,
-  });
+  const row = await storeSecret({ ...target, value });
   console.error(
     `Stored ${target.key} in ${target.project}/${target.environment} (version ${row.version}).`
   );

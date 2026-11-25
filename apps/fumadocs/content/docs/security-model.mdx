@@ -1,0 +1,63 @@
+---
+title: Security model
+description: How jomans-vault encrypts values, scopes access and records actions, and where its protection ends.
+---
+
+jomans-vault is a self-hosted secret store. Its server decrypts values for authorized requests. Decide who can run that server, hold a key and receive plaintext before storing secrets.
+
+## Envelope encryption
+
+Each project gets a random 256-bit data encryption key when it is created. The server wraps that key with AES-256-GCM under the master key from `VAULT_MASTER_KEY` and stores the wrapped key in `project_key`; it does not store the plaintext data key. The current wrapping-key version (`kekVersion`) is 1.
+
+Each secret version's value is encrypted at rest with AES-256-GCM under its project's data key, using a fresh random 96-bit IV. Tampering with ciphertext or a wrapped key causes an integrity error instead of returning decrypted data. Decryption happens only on the server, which holds the master key in memory. Authorized clients can then receive plaintext as described below.
+
+## Key scopes
+
+An API key acts for the user who created it. Its scope names projects and the environments allowed in each project. It can only reach its owner's projects and environments explicitly selected when the key was created; environments created later are not automatically included.
+
+A project not owned by the key's owner returns `404`. A project or environment outside the key's scope returns `403`, as does a missing permission. Scope is checked before the environment lookup; a missing environment within that scope returns `404`. A missing secret within an allowed scope also returns `404`.
+
+Project, environment, API key management and audit-log routes require a signed-in user session. API keys receive `403` on those routes, including listing projects or environments. The exception is revoking the calling key itself: `jv logout` calls `POST /api/v1/api-keys/current/revoke` and removes the local credential. A key cannot manage other keys or read the audit log.
+
+## Permissions
+
+Permissions apply to API keys within their scope. A signed-in user has full access to their own projects without these key permission limits.
+
+| Permission | Allows | Returns plaintext values? |
+| --- | --- | --- |
+| `read` | List secret keys, kinds, current versions and update times; read version-history metadata. | No |
+| `reveal` | Read one secret value (`jv get` or `GET …/secrets/{key}`). | **Yes — plaintext access** |
+| `inject` | Export all values in an environment as JSON or dotenv; used by `jv run`. | **Yes — plaintext access** |
+| `write` | Create or replace a value and roll back to an earlier version. | No |
+| `delete` | Soft-delete a secret. | No |
+
+`reveal` and `inject` are the two permissions that hand out plaintext. `write` can replace or roll back a value without being able to read it. It still lets the key holder change what later commands receive.
+
+A new API key defaults to `read` only. A `jv login` approval suggests `read` and `inject`. The human selects the scope and permissions before approving. Keys can have an expiry of 1 day to 1 year and can be revoked on `/settings/api-keys`. `jv logout` revokes the machine's own key.
+
+## Audit log
+
+Recorded actions are:
+
+- `project.create`, `project.delete`
+- `environment.create`, `environment.delete`
+- `secret.write`, `secret.rollback`, `secret.delete`
+- `secret.reveal`, `secret.export`
+- `apikey.create`, `apikey.revoke`
+
+Each event records the action, actor type (user or API key) and actor ID, the project, environment, secret or API key IDs it touched, the IP address, user agent and time. Target fields that do not apply are empty. Secret values are never recorded in audit events.
+
+The action depends on its audit event being written. Data changes and their events are committed together; API key creation compensates by deleting the new key if its event cannot be recorded. List requests, version-history requests and denied requests (`401`, `403`, `404`) are not recorded.
+
+The owner reads the log at `/audit` in the web app, or through `GET /api/v1/audit` with a user session. API keys cannot read it.
+
+## What the vault does not protect against
+
+- **A compromised server or host.** The server holds the master key and can decrypt values. An attacker controlling it can access plaintext.
+- **A leaked master key together with a database copy.** That combination lets an attacker unwrap the project data keys and decrypt stored values.
+- **A lost master key.** Every value becomes unrecoverable; keep a copy somewhere safe.
+- **A command leaking its injected environment.** `jv run` is not a security boundary. The command and anything it starts get the values and can print, log or send them. Only run trusted commands under it.
+- **A plaintext permission holder copying values out.** `reveal` and `inject` allow this. The audit log records that access happened, not where the value went.
+- **A stolen API key.** It works within its scope and permissions until revoked or expired. Keep it private and revoke it when exposed.
+- **Spoofed audit IP addresses.** The server records the first `X-Forwarded-For` entry, falling back to `X-Real-IP`. These are client-supplied headers unless a trusted proxy sets them; do not treat them as verified identity.
+- **Plain HTTP outside localhost.** `http://` exposes keys and values in transit. Use HTTPS when reaching the vault over a network.

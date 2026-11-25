@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build --compile src/index.ts --outfile dist/jv",
+    "build": "bun build --compile src/index.ts --outfile dist/jv && bun build src/varlock-plugin.ts --target node --format cjs --external varlock/plugin-lib --outfile dist/varlock-plugin.cjs",
     "check-types": "tsc --noEmit",
     "test": "bun run build && bun test"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -15,10 +16,12 @@
     "@jomans-vault/auth": "workspace:*",
     "@jomans-vault/config": "workspace:*",
     "@jomans-vault/db": "workspace:*",
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/bun": "^1.4.4",
     "@types/pg": "^8.23.1",
     "drizzle-orm": "catalog:",
     "pg": "^8.23.0",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "varlock": "catalog:"
   }
 }
