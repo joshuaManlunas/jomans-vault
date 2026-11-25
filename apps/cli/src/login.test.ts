@@ -414,6 +414,8 @@ test("URL precedence, normalization, usage errors and help (table driven)", asyn
     { args: ["--help"], code: 0, message: "Usage:", help: true },
     { args: ["help"], code: 0, message: "Usage:", help: true },
     { args: ["login", "--help"], code: 0, message: "Usage:", help: true },
+    { args: ["run", "--help"], code: 0, message: "Usage:", help: true },
+    { args: ["link", "--help"], code: 0, message: "Usage:", help: true },
     {
       args: ["--help"],
       testKeychain: "",
@@ -458,7 +460,15 @@ test("URL precedence, normalization, usage errors and help (table driven)", asyn
         entry.message
       );
       if (entry.help) {
-        for (const text of ["login", "--url", "--no-browser"]) {
+        for (const text of [
+          "login",
+          "link",
+          "run",
+          "--url",
+          "--project",
+          "--env",
+          "--no-browser",
+        ]) {
           expect(output.stdout).toContain(text);
         }
       } else {
@@ -602,3 +612,79 @@ test("ten-second network timeout applies to opening and polling", async () => {
     })
   );
 }, 30_000);
+
+test.each([
+  { flags: [], project: "my-app", environment: "development" },
+  { flags: ["--env", "other"], project: "my-app", environment: "other" },
+  {
+    flags: ["--project", "outside-scope"],
+    project: "outside-scope",
+    environment: "development",
+  },
+])(
+  "linked login suggests $project/$environment",
+  async ({ flags, project, environment }) => {
+    const box = await sandbox();
+    const cwd = box.env.HOME ?? "";
+    result(
+      await runJv(["link", "my-app", "--env", "development"], {
+        env: box.env,
+        cwd,
+      }),
+      0
+    );
+    const child = spawnJv(
+      ["login", "--no-browser", "--url", vault.url, ...flags],
+      { env: box.env, cwd }
+    );
+    children.push(child);
+    const id = approvalRequestId(await child.waitForStderr(/Open this link/u));
+    const [row] = await vault.db
+      .select()
+      .from(loginRequest)
+      .where(eq(loginRequest.id, id));
+    expect(row).toMatchObject({ project, environment });
+    await expectStatus(
+      vault.api("POST", `/login-requests/${id}/deny`, { cookie }),
+      200
+    );
+    result(await child.waitForExit(), 1);
+  },
+  15_000
+);
+
+test("login rejects an environment without a project, and accepts both flags without a link", async () => {
+  const box = await sandbox();
+  const options = { env: box.env, cwd: box.env.HOME };
+  const invalid = await runJv(
+    ["login", "--env", "development", "--url", vault.url],
+    options
+  );
+  result(invalid, 2);
+  expect(invalid.stderr).toContain("An environment requires a project.");
+  const child = spawnJv(
+    [
+      "login",
+      "--no-browser",
+      "--project",
+      "my-app",
+      "--env",
+      "development",
+      "--url",
+      vault.url,
+    ],
+    options
+  );
+  children.push(child);
+  const id = approvalRequestId(await child.waitForStderr(/Open this link/u));
+  const [row] = await vault.db
+    .select()
+    .from(loginRequest)
+    .where(eq(loginRequest.id, id));
+  expect(row).toMatchObject({ project: "my-app", environment: "development" });
+  await expectStatus(
+    vault.api("POST", `/login-requests/${id}/deny`, { cookie }),
+    200
+  );
+  result(await child.waitForExit(), 1);
+}, 15_000);

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import pathModule from "node:path";
 
@@ -54,11 +54,14 @@ export const writeRememberedUrl = async (
 export const resolveVaultUrl = async ({
   flag,
   env,
+  linked,
 }: {
   flag?: string;
+  linked?: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string> => {
-  const value = flag ?? (env.JV_URL || (await readRememberedUrl(env)));
+  const value =
+    flag ?? (env.JV_URL || linked || (await readRememberedUrl(env)));
   if (value === null || value === undefined) {
     throw new UsageError(
       "No vault URL. Pass --url <url>, set JV_URL, or log in once with --url."
@@ -75,4 +78,82 @@ export const resolveVaultUrl = async ({
   throw new UsageError(
     `Invalid vault URL "${value}": use an http:// or https:// URL.`
   );
+};
+
+const slugSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z0-9-]+$/u);
+const linkSchema = z.object({
+  project: slugSchema,
+  env: slugSchema,
+  url: z.string().optional(),
+});
+type Link = z.infer<typeof linkSchema>;
+
+export const validateSlug = (value: string): void => {
+  if (!slugSchema.safeParse(value).success) {
+    throw new UsageError(
+      "Invalid project or environment: use 1 to 64 lowercase letters, numbers or hyphens."
+    );
+  }
+};
+
+export const findLink = async (
+  cwd: string
+): Promise<(Link & { path: string }) | null> => {
+  let dir = pathModule.resolve(cwd);
+  while (true) {
+    const path = pathModule.join(dir, "jv.json");
+    let contents: string | undefined;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- Search each ancestor only after the nearer file is absent.
+      contents = await readFile(path, "utf-8");
+    } catch (error) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "ENOENT")
+      ) {
+        throw new UsageError(`Could not read jv.json at ${path}.`);
+      }
+    }
+    if (contents !== undefined) {
+      let value: Link;
+      try {
+        value = linkSchema.parse(JSON.parse(contents));
+      } catch {
+        throw new UsageError(
+          `Invalid jv.json at ${path}: expected {"project": "<slug>", "env": "<slug>"} with an optional "url".`
+        );
+      }
+      if (value.url !== undefined) {
+        // oxlint-disable-next-line no-await-in-loop -- Validate the nearest link before returning it.
+        value.url = await resolveVaultUrl({ flag: value.url, env: {} });
+      }
+      return { path, ...value };
+    }
+    const parent = pathModule.dirname(dir);
+    if (parent === dir) {
+      return null;
+    }
+    dir = parent;
+  }
+};
+
+export const writeLink = async (dir: string, link: Link): Promise<void> => {
+  const temporaryPath = pathModule.join(dir, `.jv-${crypto.randomUUID()}.tmp`);
+  const file = await open(temporaryPath, "wx");
+  try {
+    try {
+      await file.writeFile(
+        `${JSON.stringify({ project: link.project, env: link.env, url: link.url }, null, 2)}\n`
+      );
+    } finally {
+      await file.close();
+    }
+    // Replace the directory entry without following an existing link.
+    await rename(temporaryPath, pathModule.join(dir, "jv.json"));
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
 };

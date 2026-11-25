@@ -185,10 +185,11 @@ export interface JvResult {
 const binary = fileURLToPath(new URL("../../dist/jv", import.meta.url));
 export const spawnJv = (
   args: string[],
-  { env }: { env: NodeJS.ProcessEnv }
+  { env, cwd }: { env: NodeJS.ProcessEnv; cwd?: string }
 ) => {
   const process = Bun.spawn([binary, ...args], {
     env,
+    cwd,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -246,7 +247,7 @@ export const spawnJv = (
 };
 export const runJv = async (
   args: string[],
-  options: { env: NodeJS.ProcessEnv }
+  options: { env: NodeJS.ProcessEnv; cwd?: string }
 ): Promise<JvResult> => {
   const child = spawnJv(args, options);
   child.process.stdin.end();
