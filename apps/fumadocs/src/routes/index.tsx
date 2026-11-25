@@ -11,7 +11,7 @@ function Home() {
   return (
     <HomeLayout {...baseOptions()}>
       <div className="flex flex-1 flex-col items-center justify-center text-center">
-        <h1 className="mb-4 text-xl font-medium">jomans-vault</h1>
+        <h1 className="mb-4 text-xl font-medium">Joman's Vault Docs</h1>
         <p className="text-fd-muted-foreground mb-6 px-4">
           A self-hosted secret store for developers and their coding agents.
         </p>

@@ -1,6 +1,6 @@
 import { createGetUrl } from "fumadocs-core/source";
 
-export const appName = "jomans-vault";
+export const appName = "Joman's Vault Docs";
 export const docsRoute = "/docs";
 export const docsImageRoute = "/og/docs";
 

@@ -22,7 +22,7 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "jomans-vault docs",
+        title: "Joman's Vault Docs",
       },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
