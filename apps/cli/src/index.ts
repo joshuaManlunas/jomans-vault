@@ -12,7 +12,7 @@ import type { CredentialStore } from "./credentials";
 import { UsageError } from "./errors";
 import { login } from "./login";
 import { logout } from "./logout";
-import { run } from "./run";
+import { exportValues, run } from "./run";
 import { get, history, ls, rm, set } from "./secrets";
 
 const secretCommands = { ls, get, set, rm, history };
@@ -24,6 +24,7 @@ const isSecretCommand = (
 
 const usage = `Usage: jv link <project> --env <env> [--url <url>]
        jv run [--project <p>] [--env <e>] [--url <u>] -- <cmd> [args...]
+       jv export [--project <p>] [--env <e>] [--url <u>]
        jv login [--url <url>] [--project <p>] [--env <e>] [--no-browser]
        jv logout [--url <url>]
        jv ls [--project <p>] [--env <e>] [--url <u>]
@@ -39,6 +40,7 @@ Commands:
   logout   Log this machine out: revoke its key and remove it
   link     Link this directory to a project and environment
   run      Start a command with vault values in its environment
+  export   Print an environment's values as JSON
   ls       List secret keys, kinds and versions
   get      Print only a secret value
   set      Store a secret value
@@ -95,7 +97,9 @@ const showHelp = (args: CliArgs, separator: number): boolean => {
   }
   return (
     !command ||
-    ["login", "link", "run", ...Object.keys(secretCommands)].includes(command)
+    ["login", "link", "run", "export", ...Object.keys(secretCommands)].includes(
+      command
+    )
   );
 };
 
@@ -125,15 +129,11 @@ const linkDirectory = async (
   return 0;
 };
 
-const linkedCommand = async (
-  args: CliArgs,
-  command: "login" | "run" | SecretCommand,
-  childCommand: string[],
-  credentials: CredentialStore
-): Promise<number> => {
-  const link = await findLink(process.cwd());
-  const project = args.values.project ?? link?.project;
-  const environment = args.values.env ?? link?.env;
+const validateLinkedProject = (
+  command: string,
+  project: string | undefined,
+  environment: string | undefined
+) => {
   if (command !== "login" && (!project || !environment)) {
     throw new UsageError(
       "No project and environment. Run jv link <project> --env <env>, or pass --project and --env."
@@ -144,6 +144,18 @@ const linkedCommand = async (
       "An environment requires a project. Pass --project <p>."
     );
   }
+};
+
+const linkedCommand = async (
+  args: CliArgs,
+  command: "login" | "run" | "export" | SecretCommand,
+  childCommand: string[],
+  credentials: CredentialStore
+): Promise<number> => {
+  const link = await findLink(process.cwd());
+  const project = args.values.project ?? link?.project;
+  const environment = args.values.env ?? link?.env;
+  validateLinkedProject(command, project, environment);
   const url = await resolveVaultUrl({
     flag: args.values.url,
     env: process.env,
@@ -158,6 +170,16 @@ const linkedCommand = async (
       env: process.env,
       credentials,
     });
+  }
+  if (command === "export" && project && environment) {
+    const values = await exportValues({
+      url,
+      project,
+      environment,
+      credentials,
+    });
+    console.info(JSON.stringify(values));
+    return 0;
   }
   if (isSecretCommand(command) && project && environment) {
     if (command === "ls") {
@@ -199,6 +221,21 @@ const validateSecretArgs = (
     validCount = true;
   }
   if (!validCount || separator !== -1 || args.values["no-browser"]) {
+    throw new UsageError(usage);
+  }
+};
+
+const validateCommandArgs = (args: CliArgs, separator: number) => {
+  const [command] = args.positionals;
+  if (isSecretCommand(command)) {
+    validateSecretArgs(args, command, separator);
+  }
+  if (
+    command === "export" &&
+    (args.positionals.length !== 1 ||
+      separator !== -1 ||
+      args.values["no-browser"] !== undefined)
+  ) {
     throw new UsageError(usage);
   }
 };
@@ -245,9 +282,7 @@ const main = async (): Promise<number> => {
     const separator = argv.indexOf("--");
     const args = parseCli(argv, separator);
     const [command] = args.positionals;
-    if (isSecretCommand(command)) {
-      validateSecretArgs(args, command, separator);
-    }
+    validateCommandArgs(args, separator);
     if (showHelp(args, separator)) {
       console.info(usage);
       return 0;
@@ -268,7 +303,7 @@ const main = async (): Promise<number> => {
       return await linkedCommand(args, command, [], credentials);
     }
     if (
-      (command !== "login" && command !== "run") ||
+      (command !== "login" && command !== "run" && command !== "export") ||
       args.positionals.length !== 1 ||
       (command === "login" && separator !== -1) ||
       (command === "run" && (separator === -1 || separator === argv.length - 1))

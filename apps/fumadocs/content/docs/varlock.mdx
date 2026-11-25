@@ -1,0 +1,99 @@
+---
+title: Varlock plugin
+description: Resolve vault values in your Varlock schema with jv().
+---
+
+The local `jv()` plugin loads an environment's secrets using your existing `jv login` credential. Install the `jv` CLI, put it on `PATH`, and log in to your vault before loading the schema:
+
+```sh
+jv login --url https://vault.example.com
+```
+
+Grant the machine's key the `inject` permission for the project and environment on the approval page. The plugin runs `jv export` once per load and shares the result between all `jv()` items. This creates one `secret.export` audit event for the environment, regardless of how many items use it.
+
+## Load the local plugin
+
+Run `bun run build:cli` in the vault repository to build the CLI and the single-file plugin. Node requires the built `.mjs` file; Bun can also load the source `apps/cli/src/varlock-plugin.ts` directly.
+
+Point `@plugin()` at `apps/cli/dist/varlock-plugin.mjs` in your checkout of this repository. The path is **relative to the schema file**: adjust the example to match where your checkout lives. No npm plugin package is required. The single file runs under Node and Bun.
+
+```text title=".env.schema"
+# @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.mjs)
+# @initJv(project=my-app, env=development)
+# ---
+
+# @sensitive
+DATABASE_URL=jv()
+
+LOCAL_TOKEN=jv(SERVICE_TOKEN)
+```
+
+`jv()` uses the item's own name as the vault key. `jv(OTHER_NAME)` uses that static key instead, so `LOCAL_TOKEN` above resolves to `SERVICE_TOKEN`. Both forms imply sensitive values; the default `varlock load` output redacts them. An explicit `@sensitive=false` overrides that default. `varlock load --format json` prints resolved values, so treat that output as secrets.
+
+Declare `@initJv` exactly once in the schema header. Both `project` and `env` are required and may reference other schema items. For example, use `NODE_ENV` from the process environment to select the vault environment:
+
+```text title=".env.schema"
+# @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.mjs)
+# @initJv(project=my-app, env=$NODE_ENV)
+# ---
+
+NODE_ENV=
+DATABASE_URL=jv()
+```
+
+```sh
+NODE_ENV=development varlock load
+NODE_ENV=staging varlock load
+```
+
+The CLI runs from the directory containing the schema that declares `@initJv`, using Varlock's process environment. The vault URL comes from `JV_URL`, the nearest `jv.json`, or the last login URL. There is no `url=` argument on `@initJv`. The plugin keeps the export in memory for the current load and does not write values to a file or use Varlock's plugin cache. Values keep their trailing newlines.
+
+## Export without Varlock
+
+`jv export` prints one environment as a JSON object followed by a newline, including all its values. An empty environment prints `{}`. It requires the same `inject` permission as the plugin.
+
+```sh
+jv export --project my-app --env development
+jv export --project my-app --env staging --url https://vault.example.com
+```
+
+After `jv link my-app --env development`, `jv export` can use the linked project and environment. Flags override the link. URL resolution uses `--url`, then `JV_URL`, then the linked URL, then the last login URL. Errors go to stderr and leave stdout empty.
+
+## Troubleshooting
+
+- `NAME is not in my-app/development. Add it with jv set NAME.`: check the key name, project and environment, then add it with `jv set NAME` for that environment.
+- `Not logged in to <url>. Run jv login.`: log in using `jv login --url <url>` on the machine running Varlock.
+- `The vault at <url> rejected the stored key. Run jv login again.`: the credential is no longer accepted; log in again.
+- `The stored key for <url> cannot inject <project>/<environment>: it lacks the inject permission or is not scoped to it.`: log in again and grant `inject` for that project and environment.
+- `Project <project> or environment <environment> not found at <url>.`: check the slugs in `@initJv` and confirm they exist at the selected vault.
+- `Could not reach the vault at <url>.`: check the URL, network connection and vault availability.
+- `The vault at <url> returned an unexpected response (<status>).`: verify that the selected URL serves the vault API and check the vault's health.
+- `Could not run jv. Install the jv CLI and put it on PATH.`: install the CLI and ensure the process running Varlock can find `jv`.
+- `jv export returned an unexpected response.`: the CLI output was not a JSON object of strings. Check the installed CLI version and that `jv` on `PATH` is the vault CLI.
+- `jv export failed (exit <code>).`: the CLI exited without an error message. Check that the installed CLI runs successfully with `jv export --project <project> --env <environment>`.
+- `jv() needs @initJv(project=..., env=...) in the schema header.`: add that root decorator above the first item.
+- `@initJv needs project and env.`: supply both arguments and ensure any referenced variables resolve to non-empty strings.
+- `Use @initJv only once in the schema header.`: remove the duplicate initializer. `jv()` takes zero or one static string argument and no named arguments.
+
+CLI failures are reported using its trimmed stderr. Plugin errors do not print the export's JSON output.
+
+## Fallback with exec()
+
+You can still use Varlock's `exec()` resolver to call `jv get` for individual keys:
+
+```text title=".env.schema"
+# @sensitive
+DATABASE_URL=exec(`jv get DATABASE_URL --project my-app --env development`)
+```
+
+After `jv link my-app --env development`, you can drop the flags when Varlock runs from inside that linked directory.
+
+The machine's key needs the `reveal` permission for that project and environment. `jv login` does not suggest `reveal` by default: grant it on the approval page. Every resolve is audited as a reveal.
+
+`exec()` trims a trailing newline from command output. A value whose final newline matters, such as a PEM key, loses it this way. Use `jv()` to preserve it.
+
+`jv set NAME -` stores stdin unchanged, including a trailing newline. Pipe with `printf '%s'`, not `echo`, to store a value without adding a newline:
+
+```sh
+printf '%s' "$VALUE" | jv set NAME -
+```
