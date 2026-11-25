@@ -1,5 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
+import { ENV } from "@/env";
+
 import UserMenu from "./user-menu";
 
 const Header = () => {
@@ -19,6 +21,11 @@ const Header = () => {
               {label}
             </Link>
           ))}
+          {ENV.VITE_DOCS_URL && (
+            <a href={ENV.VITE_DOCS_URL} target="_blank" rel="noopener">
+              Docs
+            </a>
+          )}
         </nav>
         <div className="flex items-center gap-2">
           <UserMenu />
