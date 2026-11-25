@@ -1,0 +1,20 @@
+---
+title: API reference
+description: HTTP operations generated from the vault's own OpenAPI spec.
+---
+
+The API base path is `/api/v1` on your vault's URL.
+
+Authenticate with either header:
+
+```http
+Authorization: Bearer <key>
+```
+
+```http
+x-api-key: <key>
+```
+
+A signed-in browser session also authenticates requests. Sending both headers with different keys is rejected.
+
+The operation pages in this section are generated at docs build time from the vault's own spec. The running vault also serves that spec at `/api/v1/spec.json`.
