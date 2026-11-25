@@ -78,6 +78,7 @@ export const SignedOutHome = ({
           <div className="mt-7 flex flex-wrap gap-3">
             <Link
               to="/login"
+              search={{ mode: "sign-in" }}
               className={buttonVariants({
                 size: "lg",
                 className:
