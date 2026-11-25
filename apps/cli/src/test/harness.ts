@@ -1,3 +1,4 @@
+import { expect } from "bun:test";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import pathModule from "node:path";
@@ -263,4 +264,23 @@ export const approvalRequestId = (stderr: string): string => {
     throw new Error("No approval request id in stderr");
   }
   return id;
+};
+
+export const expectJvResult = (value: JvResult, exitCode: number) => {
+  expect(value.exitCode).toBe(exitCode);
+  expect(value.stderr).toContain(
+    "warning: JV_TEST_KEYCHAIN is set; using a test keychain instead of the OS keychain. Never set it outside tests."
+  );
+  expect(value.stdout).toBe("");
+};
+
+export const closedUrl = async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(),
+  });
+  const url = `http://127.0.0.1:${server.port}`;
+  await server.stop(true);
+  return url;
 };

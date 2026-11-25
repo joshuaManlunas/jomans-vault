@@ -1,16 +1,19 @@
 import { parseArgs } from "node:util";
 
-import { resolveVaultUrl } from "./config";
+import { readRememberedUrl, resolveVaultUrl } from "./config";
 import { createCredentialStore } from "./credentials";
 import { UsageError } from "./errors";
 import { login } from "./login";
+import { logout } from "./logout";
 
 const usage = `Usage: jv login [--url <url>] [--no-browser]
+       jv logout [--url <url>]
        jv --help
        jv help
 
 Commands:
   login    Log this machine in to a vault
+  logout   Log this machine out: revoke its key and remove it
 
 Flags:
   --url <url>    Vault URL (otherwise JV_URL or the last login URL)
@@ -41,11 +44,32 @@ const main = async (): Promise<number> => {
     }
     const [command] = args.positionals;
     if (
+      command === "logout" &&
+      (args.positionals.length !== 1 || args.values["no-browser"] !== undefined)
+    ) {
+      throw new UsageError(usage);
+    }
+    if (
       (command === "help" && args.positionals.length === 1) ||
-      (args.values.help && (!command || command === "login"))
+      (args.values.help && [undefined, "", "login", "logout"].includes(command))
     ) {
       console.info(usage);
       return 0;
+    }
+    if (command === "logout") {
+      const configured =
+        args.values.url ??
+        (process.env.JV_URL || (await readRememberedUrl(process.env)));
+      return await logout({
+        url:
+          configured === null
+            ? null
+            : await resolveVaultUrl({
+                flag: configured,
+                env: process.env,
+              }),
+        credentials,
+      });
     }
     if (command !== "login" || args.positionals.length !== 1) {
       throw new UsageError(usage);

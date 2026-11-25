@@ -440,6 +440,7 @@ test("another user's revoke matches unknown id and leaves the owner's key usable
 
 test("user-only key management rejects API keys with or without a cookie, and anonymous callers", async () => {
   const key = await createKey({ permissions: ["read", "reveal", "inject"] });
+  const other = await createKey();
   // Verification updates lastRequest; freeze it to prove refused handlers change no rows.
   const now = Date.now();
   setSystemTime(now);
@@ -456,6 +457,8 @@ test("user-only key management rejects API keys with or without a cookie, and an
       ["POST", "/api-keys", { name: "Forbidden", scope }],
       ["GET", "/api-keys"],
       ["POST", `/api-keys/${key.id}/revoke`],
+      ["POST", `/api-keys/${other.id}/revoke`],
+      ["POST", "/api-keys/nonexistent/revoke"],
     ];
     await Promise.all(
       routes.flatMap(([method, path, body]) =>
@@ -721,6 +724,7 @@ test("invalid, revoked and expired keys cannot use a cookie to manage keys", asy
     ["POST", "/api-keys", { name: "Forbidden", scope }],
     ["GET", "/api-keys"],
     ["POST", `/api-keys/${revoked.id}/revoke`],
+    ["POST", "/api-keys/current/revoke"],
   ];
   await Promise.all(
     ["jv_invalid", revoked.key, expired.key].flatMap((key) =>
@@ -739,4 +743,113 @@ test("invalid, revoked and expired keys cannot use a cookie to manage keys", asy
     )
   );
   expect(await snapshot()).toEqual(before);
+});
+
+test.each(["x-api-key", "Authorization"])(
+  "self-revoke via %s returns only a summary and audits the key actor once",
+  async (header) => {
+    const key = await createKey();
+    const before = await db.select().from(auditEvent);
+    const response = await request("POST", "/api-keys/current/revoke", {
+      [header]: header === "Authorization" ? `Bearer ${key.key}` : key.key,
+    });
+    expect(response.status).toBe(200);
+    const body = summarySchema.parse(await response.json());
+    expect(body).toMatchObject({ id: key.id, revoked: true });
+    await expectError(await keyRequest(key.key), 401, "UNAUTHORIZED");
+    const listed = await listKeys();
+    expect(listed.find((row) => row.id === key.id)?.revoked).toBe(true);
+    const after = await db.select().from(auditEvent);
+    expect(after).toHaveLength(before.length + 1);
+    const events = after.filter(
+      (event) => event.apiKeyId === key.id && event.action === "apikey.revoke"
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: "apikey.revoke",
+      actorType: "apiKey",
+      actorId: key.id,
+      apiKeyId: key.id,
+      projectId: null,
+      environmentId: null,
+      secretId: null,
+      ip: "192.0.2.10",
+      userAgent: requestMetadata["User-Agent"],
+    });
+    const [stored] = await db
+      .select()
+      .from(apikey)
+      .where(eq(apikey.id, key.id));
+    for (const material of [key.key, stored?.key, stored?.start]) {
+      expect(JSON.stringify({ body, events })).not.toContain(
+        material ?? "missing"
+      );
+    }
+    await expectError(
+      await request("POST", "/api-keys/current/revoke", {
+        "x-api-key": key.key,
+      }),
+      401,
+      "UNAUTHORIZED"
+    );
+    expect(await db.select().from(auditEvent)).toHaveLength(after.length);
+  }
+);
+
+test("self-revoke requires no scope or secret permissions", async () => {
+  const key = await createKey();
+  await db
+    .update(apikey)
+    .set({
+      metadata: JSON.stringify({ projects: {} }),
+      permissions: JSON.stringify({ secrets: [] }),
+    })
+    .where(eq(apikey.id, key.id));
+  const response = await request("POST", "/api-keys/current/revoke", {
+    "x-api-key": key.key,
+  });
+  expect(response.status).toBe(200);
+  expect(summarySchema.parse(await response.json()).revoked).toBe(true);
+});
+
+test("self-revoke rejects user and anonymous principals without changes", async () => {
+  const before = await snapshot();
+  await expectError(
+    await request("POST", "/api-keys/current/revoke", { cookie: userA.cookie }),
+    403,
+    "FORBIDDEN"
+  );
+  await expectError(
+    await request("POST", "/api-keys/current/revoke", {}),
+    401,
+    "UNAUTHORIZED"
+  );
+  expect(await snapshot()).toEqual(before);
+});
+
+test("audit failure rolls back self-revocation and leaves the key usable", async () => {
+  const key = await createKey();
+  setSystemTime(Date.now());
+  try {
+    const working = await keyRequest(key.key);
+    expect(working.status).toBe(200);
+    const before = await snapshot();
+    await failAudit("apikey.revoke");
+    try {
+      await expectError(
+        await request("POST", "/api-keys/current/revoke", {
+          "x-api-key": key.key,
+        }),
+        500,
+        "INTERNAL_SERVER_ERROR"
+      );
+      expect(await snapshot()).toEqual(before);
+      const stillWorking = await keyRequest(key.key);
+      expect(stillWorking.status).toBe(200);
+    } finally {
+      await restoreAudit();
+    }
+  } finally {
+    setSystemTime();
+  }
 });
