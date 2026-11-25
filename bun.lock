@@ -124,6 +124,7 @@
         "@jomans-vault/auth": "workspace:*",
         "@jomans-vault/crypto": "workspace:*",
         "@jomans-vault/db": "workspace:*",
+        "@modelcontextprotocol/server": "2.4.0",
         "@orpc/client": "catalog:",
         "@orpc/openapi": "catalog:",
         "@orpc/server": "catalog:",
@@ -132,6 +133,7 @@
       },
       "devDependencies": {
         "@jomans-vault/config": "workspace:*",
+        "@modelcontextprotocol/client": "2.4.0",
         "@types/bun": "^1.4.4",
         "@types/pg": "^8.23.1",
         "dotenv": "17.4.2",

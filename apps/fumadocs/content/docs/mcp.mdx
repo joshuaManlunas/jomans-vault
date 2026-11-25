@@ -1,7 +1,44 @@
 ---
-title: Local MCP server
-description: Run trusted commands with vault values and manage metadata through jv mcp.
+title: MCP servers
+description: Connect directly over HTTP or start a local MCP server with jv mcp.
 ---
+
+## HTTP endpoint
+
+Connect an MCP client over Streamable HTTP to `<vault origin>/api/mcp`. Pass a scoped API key as `Authorization: Bearer <key>` or `x-api-key: <key>`. The endpoint accepts API keys only: browser sessions and requests carrying a browser `Origin` header are refused.
+
+| Tool | Arguments | Permission | Result |
+| --- | --- | --- | --- |
+| `list_keys` | `project`, `environment` | `read` | Key names, kinds, versions and update times, sorted by key |
+| `set_secret` | `project`, `environment`, `key`, `value` | `write` | Key name and new version |
+
+Both tools enforce the key's project and environment scope. `set_secret` creates a key or adds a new version and records a `secret.write` audit event. The HTTP endpoint has no tool to read a value or run a command.
+
+For a client supporting HTTP MCP server configuration, replace the URL and key:
+
+```json
+{
+  "mcpServers": {
+    "jomans-vault": {
+      "type": "http",
+      "url": "https://vault.example.com/api/mcp",
+      "headers": {
+        "Authorization": "Bearer <key>"
+      }
+    }
+  }
+}
+```
+
+Or add it to Claude Code:
+
+```sh
+claude mcp add --transport http jomans-vault https://vault.example.com/api/mcp --header "Authorization: Bearer <key>"
+```
+
+Use a key with only the `read` and/or `write` permissions and environments the agent needs. A key with additional permissions still sees only these two tools. Responses use JSON with no persistent MCP session or SSE stream, including for 2025-era clients.
+
+## Local stdio server
 
 Start `jv mcp` from an MCP client using a configuration such as:
 
@@ -18,22 +55,22 @@ Start `jv mcp` from an MCP client using a configuration such as:
 
 The client's working directory determines which nearest `jv.json` is used. Run `jv link my-app --env development` there, or pass `--project my-app --env development` in the arguments. `--url` overrides `JV_URL`, the linked URL and the last login URL. Use `jv login` to approve a scoped key. The server can start before login or linking; it looks up the target and credential again on every tool call.
 
-## run (inject permission)
+### run (inject permission)
 
 Input: `{ "command": ["bun", "test"], "timeoutSeconds": 120 }`. The command array must contain at least one element. No shell is used; stdin is empty. Vault values override inherited environment variables.
 
 Output: `{ "exitCode": 0, "stdout": "...", "stderr": "...", "stdoutTruncated": false, "stderrTruncated": false, "timedOut": false }`. A nonzero child exit is a normal result. The default timeout is 120 seconds; an optional integer `timeoutSeconds` can be 1–600. At timeout the child is killed with SIGKILL (exit code 137). Each output stream retains at most 1,048,576 bytes and discards the rest while draining it. Invalid UTF-8 bytes are replaced. The truncation flags report which stream reached its cap. Disconnecting the client or sending SIGINT or SIGTERM kills active commands.
 
-## list (read permission)
+### list (read permission)
 
 Input: `{}`. Output: `{ "secrets": [{ "key": "API_TOKEN", "kind": "secret", "version": 1, "updatedAt": "2026-11-25T00:00:00Z" }] }`. Kinds are `secret`, `env` or `token`. An empty environment returns an empty array. Values are never returned.
 
-## set (write permission)
+### set (write permission)
 
 Input: `{ "key": "API_TOKEN", "value": "..." }`. Output: `{ "key": "API_TOKEN", "version": 1 }`. The value is never echoed. Keys follow `jv set` rules: 1–255 uppercase letters, digits or underscores, starting with a letter or underscore. Values must be valid UTF-8 text, at most 64 KiB.
 
 Every successful tool response contains structured output plus a JSON text copy. Tool failures use `isError: true` and the same actionable error messages as the CLI. Only these three tools are exposed; there are no resources or prompts.
 
-## Plaintext access and trusted commands
+### Plaintext access and trusted commands
 
 There is no get tool: injected values reach the command, never the agent directly. **`inject` is plaintext access. `run` is not a security boundary.** A command can print or send any value it receives, and printed values will reach the agent in its output. Only trusted commands should run under it. Choose the smallest project, environment and permissions when approving the key.
