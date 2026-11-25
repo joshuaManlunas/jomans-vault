@@ -35,11 +35,19 @@ Copy the exact `VAULT_MASTER_KEY` value from `apps/web/.env`, or wherever the ho
 
 ## Back up the database
 
-Create a custom-format database dump:
+Create a custom-format database dump outside the repository, in an owner-only directory and file:
 
 ```sh
-docker exec jomans-vault-postgres pg_dump -U postgres -Fc jomans-vault > jomans-vault.dump
+(
+  umask 077
+  mkdir -p "$HOME/jomans-vault-backups" &&
+    chmod 700 "$HOME/jomans-vault-backups" &&
+    docker exec jomans-vault-postgres pg_dump -U postgres -Fc jomans-vault > "$HOME/jomans-vault-backups/jomans-vault.dump" &&
+    chmod 600 "$HOME/jomans-vault-backups/jomans-vault.dump"
+)
 ```
+
+Database backups contain sensitive account data and authentication tokens even without the master key. Encrypt backups before copying them to backup storage and restrict access to authorized operators. Keep them outside the repository and separate from the master key.
 
 ## Restore the database
 
@@ -52,7 +60,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait pos
 Restore the dump into the database:
 
 ```sh
-docker exec -i jomans-vault-postgres pg_restore -U postgres -d jomans-vault --clean --if-exists < jomans-vault.dump
+docker exec -i jomans-vault-postgres pg_restore -U postgres -d jomans-vault --clean --if-exists < "$HOME/jomans-vault-backups/jomans-vault.dump"
 ```
 
 With the original master key restored, start the full production stack:
@@ -63,6 +71,6 @@ bun run docker:up:prod
 
 ## Back up both, keep them apart
 
-The database without the master key cannot be decrypted, and the key without the database has nothing to decrypt. Back up both as part of the same recovery plan and store them separately.
+Stored secret values in the database cannot be decrypted without the master key, and the key without the database has nothing to decrypt. Back up both as part of the same recovery plan and store them separately.
 
 **Losing `VAULT_MASTER_KEY` permanently loses every stored secret value. No recovery path exists.**
