@@ -4,7 +4,7 @@
     "host": "github.com",
     "project": "joshuaManlunas/jomans-vault"
   },
-  "concurrency": 1,
+  "concurrency": 5,
   "max_rounds": 3,
   "auto_split": false,
   "base_branch": "main",
@@ -14,10 +14,6 @@
       {
         "login": "chatgpt-codex-connector",
         "trigger": "@codex review"
-      },
-      {
-        "login": "greptile-apps",
-        "trigger": "@greptileai review"
       }
     ],
     "timeout_minutes": 20,
