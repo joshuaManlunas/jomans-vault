@@ -91,16 +91,24 @@ export const login = async ({
   noBrowser,
   env,
   credentials,
+  project,
+  environment,
 }: {
   url: string;
   noBrowser: boolean;
   env: NodeJS.ProcessEnv;
   credentials: CredentialStore;
+  project?: string;
+  environment?: string;
 }): Promise<number> => {
   const opened = await post(
     url,
     "/login-requests",
-    { machineName: hostname().trim().slice(0, 32) || "jv" },
+    {
+      machineName: hostname().trim().slice(0, 32) || "jv",
+      ...(project === undefined ? {} : { project }),
+      ...(environment === undefined ? {} : { env: environment }),
+    },
     openedSchema
   );
   const link = `${url}/cli/authorize?request=${encodeURIComponent(opened.id)}`;
