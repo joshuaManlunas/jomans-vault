@@ -5,7 +5,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import * as z from "zod";
 
 import type { Context, KeyPermission, Principal } from "../context";
-import { userProcedure } from "../index";
+import { authedProcedure, userProcedure } from "../index";
 import { recordAuditEvent } from "../middleware/audit";
 import { slug } from "./validation";
 
@@ -147,6 +147,34 @@ const summarize = (row: {
   };
 };
 
+const revokeApiKey = async (
+  context: Context & { principal: Principal },
+  id: string,
+  userId: string
+) =>
+  await context.db.transaction(async (transaction) => {
+    const owner = and(eq(apikey.id, id), eq(apikey.referenceId, userId));
+    const [updated] = await transaction
+      .update(apikey)
+      .set({ enabled: false, updatedAt: sql`now()` })
+      .where(and(owner, sql`${apikey.enabled} IS DISTINCT FROM false`))
+      .returning(summaryColumns);
+    if (updated) {
+      await recordAuditEvent(transaction, context, "apikey.revoke", {
+        apiKeyId: updated.id,
+      });
+      return summarize(updated);
+    }
+    const [existing] = await transaction
+      .select(summaryColumns)
+      .from(apikey)
+      .where(owner);
+    if (!existing) {
+      throw new ORPCError("NOT_FOUND");
+    }
+    return summarize(existing);
+  });
+
 export const apiKeysRouter = {
   create: userProcedure
     .route({ method: "POST", path: "/api-keys", successStatus: 201 })
@@ -173,30 +201,19 @@ export const apiKeysRouter = {
     .output(summaryOutput)
     .handler(
       async ({ context, input }) =>
-        await context.db.transaction(async (transaction) => {
-          const owner = and(
-            eq(apikey.id, input.id),
-            eq(apikey.referenceId, context.principal.user.id)
-          );
-          const [updated] = await transaction
-            .update(apikey)
-            .set({ enabled: false, updatedAt: sql`now()` })
-            .where(and(owner, sql`${apikey.enabled} IS DISTINCT FROM false`))
-            .returning(summaryColumns);
-          if (updated) {
-            await recordAuditEvent(transaction, context, "apikey.revoke", {
-              apiKeyId: updated.id,
-            });
-            return summarize(updated);
-          }
-          const [existing] = await transaction
-            .select(summaryColumns)
-            .from(apikey)
-            .where(owner);
-          if (!existing) {
-            throw new ORPCError("NOT_FOUND");
-          }
-          return summarize(existing);
-        })
+        await revokeApiKey(context, input.id, context.principal.user.id)
     ),
+  revokeCurrent: authedProcedure
+    .route({ method: "POST", path: "/api-keys/current/revoke" })
+    .output(summaryOutput)
+    .handler(async ({ context }) => {
+      if (context.principal.type !== "apiKey") {
+        throw new ORPCError("FORBIDDEN");
+      }
+      return await revokeApiKey(
+        context,
+        context.principal.keyId,
+        context.principal.userId
+      );
+    }),
 };

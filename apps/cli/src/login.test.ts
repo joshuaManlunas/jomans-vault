@@ -16,12 +16,14 @@ import * as z from "zod";
 
 import {
   approvalRequestId,
+  closedUrl,
+  expectJvResult as result,
   createSandbox,
   runJv,
   spawnJv,
   startVault,
 } from "./test/harness";
-import type { JvResult, Sandbox, Vault } from "./test/harness";
+import type { Sandbox, Vault } from "./test/harness";
 
 const warning =
   "warning: JV_TEST_KEYCHAIN is set; using a test keychain instead of the OS keychain. Never set it outside tests.";
@@ -39,11 +41,6 @@ const spawn = (args: string[], env: NodeJS.ProcessEnv) => {
   const child = spawnJv(args, { env });
   children.push(child);
   return child;
-};
-const result = (value: JvResult, exitCode: number) => {
-  expect(value.exitCode).toBe(exitCode);
-  expect(value.stderr).toContain(warning);
-  expect(value.stdout).toBe("");
 };
 const configPath = (box: Sandbox, name: string) =>
   pathModule.join(box.env.XDG_CONFIG_HOME ?? "", "jv", name);
@@ -97,17 +94,6 @@ const approved = async (box: Sandbox, url = vault.url) => {
   result(output, 0);
   return output;
 };
-const closedUrl = async () => {
-  const server = Bun.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    fetch: () => new Response(),
-  });
-  const url = `http://127.0.0.1:${server.port}`;
-  await server.stop(true);
-  return url;
-};
-
 beforeAll(async () => {
   vault = await startVault();
   ({ cookie } = await vault.signup("cli-owner@example.com"));

@@ -1,20 +1,29 @@
 import { parseArgs } from "node:util";
 
-import { findLink, resolveVaultUrl, validateSlug, writeLink } from "./config";
+import {
+  findLink,
+  readRememberedUrl,
+  resolveVaultUrl,
+  validateSlug,
+  writeLink,
+} from "./config";
 import { createCredentialStore } from "./credentials";
 import type { CredentialStore } from "./credentials";
 import { UsageError } from "./errors";
 import { login } from "./login";
+import { logout } from "./logout";
 import { run } from "./run";
 
 const usage = `Usage: jv link <project> --env <env> [--url <url>]
        jv run [--project <p>] [--env <e>] [--url <u>] -- <cmd> [args...]
        jv login [--url <url>] [--project <p>] [--env <e>] [--no-browser]
+       jv logout [--url <url>]
        jv --help
        jv help
 
 Commands:
   login    Log this machine in to a vault
+  logout   Log this machine out: revoke its key and remove it
   link     Link this directory to a project and environment
   run      Start a command with vault values in its environment
 
@@ -46,13 +55,24 @@ const parseCli = (argv: string[], separator: number) => {
 };
 type CliArgs = ReturnType<typeof parseCli>;
 
-const showHelp = (args: CliArgs): boolean => {
+const showHelp = (args: CliArgs, separator: number): boolean => {
   const [command] = args.positionals;
-  return (
-    (command === "help" && args.positionals.length === 1) ||
-    (Boolean(args.values.help) &&
-      (!command || ["login", "link", "run"].includes(command)))
-  );
+  if (command === "help") {
+    return args.positionals.length === 1;
+  }
+  if (!args.values.help) {
+    return false;
+  }
+  if (command === "logout") {
+    return (
+      args.positionals.length === 1 &&
+      args.values["no-browser"] === undefined &&
+      args.values.project === undefined &&
+      args.values.env === undefined &&
+      separator === -1
+    );
+  }
+  return !command || ["login", "link", "run"].includes(command);
 };
 
 const linkDirectory = async (
@@ -125,6 +145,36 @@ const linkedCommand = async (
   });
 };
 
+const logoutCommand = async (
+  args: CliArgs,
+  separator: number,
+  credentials: CredentialStore
+): Promise<number> => {
+  if (
+    args.positionals.length !== 1 ||
+    args.values["no-browser"] !== undefined ||
+    args.values.project !== undefined ||
+    args.values.env !== undefined ||
+    separator !== -1
+  ) {
+    throw new UsageError(usage);
+  }
+  const link = await findLink(process.cwd());
+  const configured =
+    args.values.url ??
+    (process.env.JV_URL || link?.url || (await readRememberedUrl(process.env)));
+  return await logout({
+    url:
+      configured === null
+        ? null
+        : await resolveVaultUrl({
+            flag: configured,
+            env: process.env,
+          }),
+    credentials,
+  });
+};
+
 const main = async (): Promise<number> => {
   if (process.env.JV_TEST_KEYCHAIN) {
     console.error(
@@ -137,9 +187,12 @@ const main = async (): Promise<number> => {
     const separator = argv.indexOf("--");
     const args = parseCli(argv, separator);
     const [command] = args.positionals;
-    if (showHelp(args)) {
+    if (showHelp(args, separator)) {
       console.info(usage);
       return 0;
+    }
+    if (command === "logout") {
+      return await logoutCommand(args, separator, credentials);
     }
     if (args.values.project !== undefined) {
       validateSlug(args.values.project);
