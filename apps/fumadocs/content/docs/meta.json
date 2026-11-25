@@ -1,0 +1,10 @@
+{
+  "pages": [
+    "index",
+    "quickstart",
+    "agent-quickstart",
+    "security-model",
+    "varlock-exec",
+    "..."
+  ]
+}
