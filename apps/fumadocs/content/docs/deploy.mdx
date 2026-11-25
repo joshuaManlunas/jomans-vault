@@ -21,7 +21,7 @@ This guide covers deploying the full Joman's Vault stack on a single Linux VPS (
   - `vault.example.com`
   - `docs.example.com`
 - **Software on the VPS:**
-  - Docker Engine + **Docker Compose v2.24 or later** (required for `ports: !reset []` in `docker-compose.prod.yml`)
+  - Docker Engine + **Docker Compose v2.24.4 or later** (required for `ports: !reset []` in `docker-compose.prod.yml` and `ports: !override` in the VPS override)
   - Bun 1.x (for building `apps/fumadocs`, running migrations, or building `jv`)
   - Caddy (automatic Let's Encrypt TLS reverse proxy and static file server)
 
@@ -42,14 +42,14 @@ sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
-Install Docker (official repo, ensuring Compose v2.24+), Bun, and Caddy:
+Install Docker (official repo, ensuring Compose v2.24.4+), Bun, and Caddy:
 
 ```sh
 # Docker
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
 newgrp docker
-docker compose version   # must be >= 2.24.0
+docker compose version   # must be >= 2.24.4
 
 # Bun
 curl -fsSL https://bun.sh/install | bash
@@ -115,13 +115,13 @@ EOF
 
 ## 4. Create a VPS Compose override
 
-The base `docker-compose.yml` binds `web` to `3001:3001` on all interfaces and defaults `BETTER_AUTH_URL` and `CORS_ORIGIN` to `http://localhost:3001`. On a VPS behind Caddy, add a local override file (`docker-compose.vps.yml`, gitignored or kept alongside the repo) that binds `web` to loopback only and forwards your HTTPS origin from `apps/web/.env`:
+The base `docker-compose.yml` binds `web` to `3001:3001` on all interfaces and defaults `BETTER_AUTH_URL` and `CORS_ORIGIN` to `http://localhost:3001`. On a VPS behind Caddy, add a local override file (`docker-compose.vps.yml`, gitignored or kept alongside the repo) that binds `web` to loopback only (`!override` replaces the base port list; `!reset` would drop the loopback mapping too) and forwards your HTTPS origin from `apps/web/.env`:
 
 ```yaml
 # /opt/jomans-vault/docker-compose.vps.yml
 services:
   web:
-    ports: !reset
+    ports: !override
       - "127.0.0.1:3001:3001"
     environment:
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL in apps/web/.env}
