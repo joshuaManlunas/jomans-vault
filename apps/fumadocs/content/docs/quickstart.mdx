@@ -1,0 +1,125 @@
+---
+title: Human quickstart
+description: Set up a local vault, add a secret and run a command with jv.
+---
+
+This walkthrough uses project `my-app`, environment `development` and a harmless example secret named `GREETING`. Run the shell commands from the repository root unless a step says otherwise. Use this local vault at `http://localhost:3001`.
+
+## Prerequisites
+
+Install Bun (the repository pins its version in `package.json`), Docker with Docker Compose, Git and `openssl`. Start Docker before continuing. This path uses a POSIX shell on macOS or Linux and needs ports 5432 and 3001 available.
+
+## Set up the vault
+
+Clone the repository and install the locked dependencies:
+
+```sh
+git clone https://github.com/joshuaManlunas/jomans-vault.git
+cd jomans-vault
+bun install --frozen-lockfile
+```
+
+Create the local environment file. The shell expands the two `openssl` commands, generating an auth secret and a base64-encoded 32-byte vault master key:
+
+```sh
+umask 077
+cat > apps/web/.env <<EOF
+NODE_ENV=development
+BETTER_AUTH_SECRET=$(openssl rand -hex 32)
+BETTER_AUTH_URL=http://localhost:3001
+DATABASE_URL=postgresql://postgres:password@localhost:5432/jomans-vault
+VAULT_MASTER_KEY=$(openssl rand -base64 32)
+EOF
+```
+
+Losing `VAULT_MASTER_KEY` makes every stored value unrecoverable. Keep a copy somewhere safe. Keep `.env` private and out of Git, and do not regenerate the master key after storing secrets.
+
+Start Postgres, wait for it to be healthy, then apply the migrations:
+
+```sh
+bun run db:start
+docker compose up -d --wait postgres
+TURBO_UI=true bun run db:migrate
+```
+
+The migration task uses Turborepo's terminal UI; `TURBO_UI=true` enables it explicitly.
+
+Start the web app and leave this terminal running:
+
+```sh
+bun run dev:web
+```
+
+Open [http://localhost:3001](http://localhost:3001).
+
+## Sign up
+
+Open `/login` in the web app. It starts on **Create Account**. Enter your name, email and password, then select **Sign Up**.
+
+## Create a project and environment
+
+1. Open **Projects** (`/projects`) and select **New project**.
+2. Enter **My app** for Name and `my-app` for Slug, then select **Create project**.
+3. Open **My app** and select **Add environment**.
+4. Enter `development` for Name and select **Add environment**.
+
+The new environment opens at `/projects/my-app/development`.
+
+## Add a secret
+
+Select **Add secret** and enter:
+
+| Field | Value                  |
+| ----- | ---------------------- |
+| Key   | `GREETING`             |
+| Value | `hello from the vault` |
+| Kind  | `secret`               |
+
+Select **Add secret** to save it. The list shows the key and version metadata.
+
+## Build jv
+
+Open a second terminal in the repository root. Build the CLI and add its output directory to this terminal's PATH:
+
+```sh
+bun run build:cli
+export PATH="$PWD/apps/cli/dist:$PATH"
+```
+
+Keep using this terminal for the remaining commands.
+
+## jv login: approve this machine
+
+```sh
+jv login --url http://localhost:3001
+```
+
+The CLI opens the browser and also prints an approval link. Open that link if the browser does not open automatically. Sign in if asked. On **Approve CLI login**, select `my-app` and its `development` environment. Keep the suggested `read` and `inject` permissions, then select **Approve**.
+
+Wait for the terminal to report `Logged in to http://localhost:3001`. The key is stored in the OS keychain. If the keychain is unavailable, the CLI warns that it stored the key in `credentials.json` in its config directory with mode 0600. The directory is `$XDG_CONFIG_HOME/jv` when `XDG_CONFIG_HOME` is absolute, otherwise `~/.config/jv`. The vault URL is remembered for later commands.
+
+## jv link: choose the environment
+
+```sh
+jv link my-app --env development
+```
+
+This writes `jv.json` in the current directory. It contains project and environment slugs and an optional URL, never a secret or API key, so it is safe to commit. Commands find the nearest `jv.json` by searching upward from their directory.
+
+## jv run: start a command with secrets
+
+```sh
+jv run -- printenv GREETING
+```
+
+Expected output:
+
+```text
+hello from the vault
+```
+
+This deliberately prints the harmless example value to confirm the setup. For real work, run the command that needs the secret under `jv run --`.
+
+`jv run` adds the environment's values to the command's environment without writing them to disk. It requires `inject`, which is plaintext access. `jv run` is not a security boundary: the command and anything it starts receive the values and can print, log or send them. Only run trusted commands under it.
+
+Read the [agent quickstart](/docs/agent-quickstart) before giving an agent access, and the [security model](/docs/security-model) for the limits of that access.

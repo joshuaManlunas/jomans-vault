@@ -5,7 +5,7 @@
   "sideEffects": false,
   "scripts": {
     "dev": "vite dev --port=4000",
-    "build": "vite build",
+    "build": "NODE_ENV=production vite build",
     "start": "serve .output/public --config ../../serve.json",
     "preview": "vite preview",
     "types:check": "tsc --noEmit",
