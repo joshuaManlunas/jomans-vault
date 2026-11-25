@@ -35,6 +35,7 @@
         "drizzle-orm": "catalog:",
         "pg": "^8.23.0",
         "typescript": "catalog:",
+        "varlock": "catalog:",
       },
     },
     "apps/fumadocs": {

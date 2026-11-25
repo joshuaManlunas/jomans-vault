@@ -80,6 +80,34 @@ Flags before `--`: `--project`, `--env`, `--url`, `--help`. Arguments after `--`
 jv run --project my-app --env development -- bun run dev
 ```
 
+## export
+
+```text
+jv export [--project <p>] [--env <e>] [--url <u>]
+```
+
+Print an environment's secret values as a JSON object on stdout. Used by the Varlock `jv()` plugin to resolve all secrets for a schema in one request.
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `inject`, scoped to the project and environment.
+
+```sh
+jv export --project my-app --env development
+```
+
+## mcp
+
+```text
+jv mcp [--project <p>] [--env <e>] [--url <u>]
+```
+
+Serve `run`, `list` and `set` tools to an MCP client over stdio. Offers no raw `get` tool.
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permissions depend on the tool called (`inject` for `run`, `read` for `list`, `write` for `set`).
+
+```sh
+jv mcp --project my-app --env development
+```
+
 ## ls
 
 ```text
@@ -176,9 +204,9 @@ jv get --help
 
 | Flag | Commands | Meaning |
 | --- | --- | --- |
-| `--url` | `login`, `logout`, `link`, `run`, `ls`, `get`, `set`, `rm`, `history` | Select the vault URL; on `link`, save it in `jv.json`. |
-| `--project` | `login`, `run`, `ls`, `get`, `set`, `rm`, `history` | Override the linked project; on `login`, pre-fill the approval scope. |
-| `--env` | `login`, `link`, `run`, `ls`, `get`, `set`, `rm`, `history` | Override the linked environment; required on `link`; on `login`, pre-fill the approval scope. |
+| `--url` | `login`, `logout`, `link`, `run`, `export`, `mcp`, `ls`, `get`, `set`, `rm`, `history` | Select the vault URL; on `link`, save it in `jv.json`. |
+| `--project` | `login`, `run`, `export`, `mcp`, `ls`, `get`, `set`, `rm`, `history` | Override the linked project; on `login`, pre-fill the approval scope. |
+| `--env` | `login`, `link`, `run`, `export`, `mcp`, `ls`, `get`, `set`, `rm`, `history` | Override the linked environment; required on `link`; on `login`, pre-fill the approval scope. |
 | `--no-browser` | `login` | Print the approval URL without opening a browser. |
 | `--help` | All commands above, or `jv --help` | Print help. `jv help` is the equivalent command. |
 

@@ -56,6 +56,24 @@ export const fetchValues = async (
   );
 };
 
+export const exportValues = async ({
+  url,
+  project,
+  environment,
+  credentials,
+}: {
+  url: string;
+  project: string;
+  environment: string;
+  credentials: CredentialStore;
+}): Promise<Record<string, string>> => {
+  const key = await credentials.get(url);
+  if (!key) {
+    throw new Error(`Not logged in to ${url}. Run jv login.`);
+  }
+  return await fetchValues(url, project, environment, key);
+};
+
 export const run = async ({
   url,
   project,
@@ -71,11 +89,7 @@ export const run = async ({
   env: NodeJS.ProcessEnv;
   credentials: CredentialStore;
 }): Promise<number> => {
-  const key = await credentials.get(url);
-  if (!key) {
-    throw new Error(`Not logged in to ${url}. Run jv login.`);
-  }
-  const values = await fetchValues(url, project, environment, key);
+  const values = await exportValues({ url, project, environment, credentials });
   let child: Bun.Subprocess<"inherit", "inherit", "inherit">;
   try {
     child = Bun.spawn(command, {
