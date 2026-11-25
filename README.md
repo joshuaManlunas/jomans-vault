@@ -116,6 +116,7 @@ For more details, see the guide on [Deploying with Docker Compose](https://www.b
 ```
 jomans-vault/
 ├── apps/
+│   ├── cli/         # Compiled jv CLI (login)
 │   └── web/         # Fullstack application (React + TanStack Start)
 ├── packages/
 │   ├── ui/          # Shared shadcn/ui components and styles
@@ -128,6 +129,7 @@ jomans-vault/
 
 - `bun run dev`: Start all applications in development mode
 - `bun run build`: Build all applications
+- `bun run build:cli`: Build `apps/cli/dist/jv`
 - `bun run dev:web`: Start only the web application
 - `bun run check-types`: Check TypeScript types across all apps
 - `bun run db:push`: Push schema changes for disposable prototyping; use migrations for setup

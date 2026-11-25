@@ -208,7 +208,7 @@ The API tests should run against the dockerized Postgres (`bun run db:start`), n
 
 ## Decisions (accepted 2026-11-14)
 
-All eight recommendations below were accepted as written. Q8 still has a check to do before the CLI is built.
+All eight recommendations below were accepted as written. The Q8 check is done: `Bun.secrets` is present in Bun 1.4.4.
 
 | # | Question | Decision | Why |
 | --- | --- | --- | --- |
@@ -219,4 +219,4 @@ All eight recommendations below were accepted as written. Q8 still has a check t
 | Q5 | **Where does the master key (KEK) live?** | The `VAULT_MASTER_KEY` env var now, with `kekVersion` in place so a KMS can replace it later | It's simple to self-host, and the rotation path is already in the schema. |
 | Q6 | **Expose an MCP server for agents?** | Yes, in phase 4, as an `apps/web` route over the same routers, offering `list`, `set`, and `run`-style tools but no raw `get` by default | Agents can use REST today, but MCP makes discovery easy. Leaving out raw `get` cuts accidental exposure. The `run` tool still needs `inject`, so the trust caveat in Q3 applies. |
 | Q7 | **Hosting?** | Self-host with the existing `docker-compose.yml` on a box you control | No new infrastructure, and the secrets stay with you. |
-| Q8 | **Where does the CLI keep its credential?** | The OS keychain (Keychain on macOS) via Bun's secrets API. Check that this API exists in Bun 1.4 before relying on it, and fall back to a `0600` file only if it doesn't | This matches the goal of no secrets in local files. |
+| Q8 | **Where does the CLI keep its credential?** | The OS keychain (Keychain on macOS) via Bun's secrets API. `Bun.secrets` is present in Bun 1.4.4 (checked); fall back to a `0600` file when the OS keychain is unavailable | This matches the goal of no secrets in local files. |
