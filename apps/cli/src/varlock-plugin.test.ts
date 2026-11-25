@@ -179,13 +179,45 @@ test.each(["Node", "Bun"])(
   15_000
 );
 
+test.each([".env", ".env.local", ".env.development", ".env.development.local"])(
+  "shares the directory schema's initializer and export with %s",
+  async (filename) => {
+    const box = await sandbox();
+    await fixture.authenticate(box);
+    await schema(box);
+    await writeFile(
+      pathModule.join(box.cwd, filename),
+      "BAR=jv()\nLOCAL=jv(BAR)\n"
+    );
+    const before = await exportCount();
+    const output = await load(box, [
+      "--format",
+      "json",
+      "--env",
+      "development",
+    ]);
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({
+      FOO: secretValues.FOO,
+      BAR: secretValues.BAR,
+      LOCAL: secretValues.BAR,
+    });
+    expect(await exportCount()).toBe(before + 1);
+    fixture.noLeaks(output, true);
+  },
+  15_000
+);
+
 test.each([
-  { rootInit: true, importedInit: false },
-  { rootInit: false, importedInit: true },
-  { rootInit: true, importedInit: true },
+  { rootInit: true, importedInit: false, importPath: "./imported/.env.schema" },
+  { rootInit: false, importedInit: true, importPath: "./imported/.env.schema" },
+  { rootInit: true, importedInit: true, importPath: "./imported/.env.schema" },
+  { rootInit: true, importedInit: false, importPath: "./imported/" },
+  { rootInit: false, importedInit: true, importPath: "./imported/" },
+  { rootInit: true, importedInit: true, importPath: "./imported/" },
 ])(
-  "isolates schemas in one load (root init: $rootInit, imported init: $importedInit)",
-  async ({ rootInit, importedInit }) => {
+  "isolates schemas in one load (root init: $rootInit, imported init: $importedInit, import: $importPath)",
+  async ({ rootInit, importedInit, importPath }) => {
     const box = await sandbox();
     await fixture.authenticate(box);
     const importedCwd = pathModule.join(box.cwd, "imported");
@@ -198,7 +230,7 @@ test.each([
     await schema(
       box,
       "ROOT=jv(FOO)\nROOT_ALIAS=jv(FOO)\n",
-      `${rootInit ? "# @initJv(project=my-app, env=development)\n" : ""}# @import(./imported/.env.schema)\n`
+      `${rootInit ? "# @initJv(project=my-app, env=development)\n" : ""}# @import(${importPath})\n`
     );
     const developmentBefore = await exportCount();
     const stagingBefore = await exportCount("staging");

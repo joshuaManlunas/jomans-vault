@@ -140,7 +140,11 @@ plugin.registerResolverFunction({
   argsSchema: { type: "array", arrayMinLength: 0, arrayMaxLength: 1 },
   process() {
     const configuration =
-      this.dataSource && configurations.get(this.dataSource);
+      this.dataSource &&
+      (configurations.get(this.dataSource) ??
+        configurations.get(
+          Reflect.get(this.dataSource.parent ?? {}, "schemaDataSource")
+        ));
     if (!configuration) {
       throw new SchemaError(
         "jv() needs @initJv(project=..., env=...) in the schema header."

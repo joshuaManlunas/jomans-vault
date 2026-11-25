@@ -30,7 +30,7 @@ LOCAL_TOKEN=jv(SERVICE_TOKEN)
 
 `jv()` uses the item's own name as the vault key. `jv(OTHER_NAME)` uses that static key instead, so `LOCAL_TOKEN` above resolves to `SERVICE_TOKEN`. Both forms imply sensitive values; the default `varlock load` output redacts them. An explicit `@sensitive=false` overrides that default. `varlock load --format json` prints resolved values, so treat that output as secrets.
 
-Declare `@initJv` exactly once in each schema header that uses `jv()`. Each schema has its own configuration and in-memory export; imported schemas need their own initializer. Both `project` and `env` are required and may reference other schema items. For example, use `NODE_ENV` from the process environment to select the vault environment:
+Declare `@initJv` exactly once in each schema header that uses `jv()`. Sibling `.env`, `.env.local`, `.env.<env>` and `.env.<env>.local` files in the same directory share that schema's configuration and in-memory export. Imported schemas and directories need their own initializer. Both `project` and `env` are required and may reference other schema items. For example, use `NODE_ENV` from the process environment to select the vault environment:
 
 ```text title=".env.schema"
 # @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.cjs)
