@@ -1,0 +1,68 @@
+---
+title: Deploy and back up
+description: Start the production Compose stack and back up and restore its database and master key.
+---
+
+## Start production
+
+From the repository root, run:
+
+```sh
+bun run docker:up:prod
+```
+
+The equivalent Compose command is:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.key.yml -f docker-compose.prod.yml --env-file apps/web/.env up -d --build
+```
+
+Set `VAULT_MASTER_KEY` in `apps/web/.env` or export it in the host environment. An exported value takes precedence. Both `bun run docker:up` and `bun run docker:up:prod` fail before starting containers if the key is unset or empty.
+
+The production override uses `ports: !reset`, which requires Docker Compose 2.24 or later. Use `bun run docker:logs` to follow logs and `bun run docker:down` to stop this stack.
+
+## Postgres is not on the host
+
+The production stack does not publish host port 5432. The web service reaches `postgres:5432` over the Compose network. Open a database shell through the container:
+
+```sh
+docker exec -it jomans-vault-postgres psql -U postgres jomans-vault
+```
+
+## Back up the master key
+
+Copy the exact `VAULT_MASTER_KEY` value from `apps/web/.env`, or wherever the host environment gets it, into storage kept separate from database backups, such as a password manager or offline media. To restore the key, put that same value back in `apps/web/.env` or the host environment.
+
+## Back up the database
+
+Create a custom-format database dump:
+
+```sh
+docker exec jomans-vault-postgres pg_dump -U postgres -Fc jomans-vault > jomans-vault.dump
+```
+
+## Restore the database
+
+Start Postgres alone with the production port override. This command does not require the master key:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait postgres
+```
+
+Restore the dump into the database:
+
+```sh
+docker exec -i jomans-vault-postgres pg_restore -U postgres -d jomans-vault --clean --if-exists < jomans-vault.dump
+```
+
+With the original master key restored, start the full production stack:
+
+```sh
+bun run docker:up:prod
+```
+
+## Back up both, keep them apart
+
+The database without the master key cannot be decrypted, and the key without the database has nothing to decrypt. Back up both as part of the same recovery plan and store them separately.
+
+**Losing `VAULT_MASTER_KEY` permanently loses every stored secret value. No recovery path exists.**
