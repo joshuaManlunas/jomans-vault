@@ -1,34 +1,23 @@
 ---
-title: Hello World
-description: Your favourite docs framework.
-icon: Rocket
+title: Home
+description: A self-hosted secret store for developers and their coding agents.
 ---
 
-Hey there! Fumadocs is the docs framework that also works on Tanstack Start!
+jomans-vault stores secrets for your projects and environments. Developers manage values in the web app and run local commands with the `jv` CLI. Coding agents get scoped API keys with only the access their work needs.
 
-## Heading
-
-Hello World!
+Start with a local vault, then choose how to give a machine or agent access. Read the security model before granting permissions that return plaintext.
 
 <Cards>
-  <Card
-    title="Learn more about Tanstack Start"
-    href="https://tanstack.com/start"
-  />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
+  <Card title="Human quickstart" href="/docs/quickstart">
+    Set up a local vault and run your first command with an injected secret.
+  </Card>
+  <Card title="Agent quickstart" href="/docs/agent-quickstart">
+    Use a scoped key to inspect metadata and run trusted commands.
+  </Card>
+  <Card title="Security model" href="/docs/security-model">
+    Understand encryption, permissions, the audit log and their limits.
+  </Card>
+  <Card title="Varlock with jv get" href="/docs/varlock-exec">
+    Resolve a value through Varlock's exec() while the jv() plugin is pending.
+  </Card>
 </Cards>
-
-### CodeBlock
-
-```ts
-console.log("Hello World");
-```
-
-#### Table
-
-| Head                            | Description                         |
-| ------------------------------- | ----------------------------------- |
-| `hello`                         | Hello World                         |
-| very **important**              | Hey                                 |
-| _Surprisingly_                  | Fumadocs                            |
-| very long text that looks weird | hello world hello world hello world |

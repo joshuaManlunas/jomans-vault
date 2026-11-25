@@ -12,6 +12,7 @@ import type { CredentialStore } from "./credentials";
 import { UsageError } from "./errors";
 import { login } from "./login";
 import { logout } from "./logout";
+import { mcp } from "./mcp";
 import { exportValues, run } from "./run";
 import { get, history, ls, rm, set } from "./secrets";
 
@@ -27,6 +28,7 @@ const usage = `Usage: jv link <project> --env <env> [--url <url>]
        jv export [--project <p>] [--env <e>] [--url <u>]
        jv login [--url <url>] [--project <p>] [--env <e>] [--no-browser]
        jv logout [--url <url>]
+       jv mcp [--project <p>] [--env <e>] [--url <u>]
        jv ls [--project <p>] [--env <e>] [--url <u>]
        jv get <KEY> [--project <p>] [--env <e>] [--url <u>]
        jv set <KEY> [<value> | -] [--project <p>] [--env <e>] [--url <u>]
@@ -41,6 +43,7 @@ Commands:
   link     Link this directory to a project and environment
   run      Start a command with vault values in its environment
   export   Print an environment's values as JSON
+  mcp      Serve run, list and set tools to an MCP client over stdio
   ls       List secret keys, kinds and versions
   get      Print only a secret value
   set      Store a secret value
@@ -97,9 +100,14 @@ const showHelp = (args: CliArgs, separator: number): boolean => {
   }
   return (
     !command ||
-    ["login", "link", "run", "export", ...Object.keys(secretCommands)].includes(
-      command
-    )
+    [
+      "login",
+      "link",
+      "run",
+      "export",
+      "mcp",
+      ...Object.keys(secretCommands),
+    ].includes(command)
   );
 };
 
@@ -231,7 +239,7 @@ const validateCommandArgs = (args: CliArgs, separator: number) => {
     validateSecretArgs(args, command, separator);
   }
   if (
-    command === "export" &&
+    (command === "export" || command === "mcp") &&
     (args.positionals.length !== 1 ||
       separator !== -1 ||
       args.values["no-browser"] !== undefined)
@@ -270,6 +278,15 @@ const logoutCommand = async (
   });
 };
 
+const validateTargetFlags = (args: CliArgs) => {
+  if (args.values.project !== undefined) {
+    validateSlug(args.values.project);
+  }
+  if (args.values.env !== undefined) {
+    validateSlug(args.values.env);
+  }
+};
+
 const main = async (): Promise<number> => {
   if (process.env.JV_TEST_KEYCHAIN) {
     console.error(
@@ -290,11 +307,9 @@ const main = async (): Promise<number> => {
     if (command === "logout") {
       return await logoutCommand(args, separator, credentials);
     }
-    if (args.values.project !== undefined) {
-      validateSlug(args.values.project);
-    }
-    if (args.values.env !== undefined) {
-      validateSlug(args.values.env);
+    validateTargetFlags(args);
+    if (command === "mcp") {
+      return await mcp({ flags: args.values, env: process.env, credentials });
     }
     if (command === "link") {
       return await linkDirectory(args, separator);

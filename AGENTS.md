@@ -133,6 +133,8 @@ After pulling a change that adds a migration, update the local database with `bu
 
 **CLI.** `bun run build:cli` builds the executable `apps/cli/dist/jv`. `jv ls`, `jv get`, `jv set`, `jv rm` and `jv history` list, read, store, remove and inspect secrets; `jv get` prints only the value. CLI tests drive terminal-only behaviour through `runJvInTerminal` in the test harness, build the binary first, require Postgres, and never touch the real keychain: they use `JV_TEST_KEYCHAIN`. The config directory is `$XDG_CONFIG_HOME/jv` when absolute, otherwise `~/.config/jv`. `jv.json` is found in the nearest directory upward, holds only project/environment slugs and an optional URL and is safe to commit; `jv run` injects values without writing them to disk.
 
+The API reference is generated from `generateOpenApiSpec()` in `packages/api/src/openapi.ts` at docs build time; the CLI reference in `apps/fumadocs/content/docs/cli.mdx` is hand-written and must be updated whenever `jv help` changes, which the CLI help test enforces.
+
 **Dev server.** `bun run dev:web -- --port <port>` starts the web app (default port 3001). The docs site: `cd apps/fumadocs && bun run dev -- --port <port>` (default 4000).
 
 **Validation** (what `factory/checks.sh` runs, from the repo root): `bun run check` (lint + format), `bun run check-types`, `bun run build`, and `bun run test`, which runs `bun test` in every package with a `test` script. The crypto tests need no database; the api package tests need Postgres up and create and drop their own database.

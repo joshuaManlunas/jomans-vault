@@ -6,7 +6,7 @@ import type { CredentialStore } from "./credentials";
 
 const exportSchema = z.record(z.string(), z.string());
 
-const fetchValues = async (
+export const fetchValues = async (
   url: string,
   project: string,
   environment: string,
