@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import {
   chmod,
+  cp,
   mkdir,
   readdir,
   readFile,
+  realpath,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -21,7 +23,7 @@ let fixture: Awaited<ReturnType<typeof startExportFixture>>;
 const boxes: Sandbox[] = [];
 const sourcePath = fileURLToPath(new URL("varlock-plugin.ts", import.meta.url));
 const pluginPath = fileURLToPath(
-  new URL("../dist/varlock-plugin.mjs", import.meta.url)
+  new URL("../dist/varlock-plugin.cjs", import.meta.url)
 );
 const varlockPath = fileURLToPath(
   new URL("../../../node_modules/.bin/varlock", import.meta.url)
@@ -57,10 +59,11 @@ const load = async (
   box: PluginSandbox,
   args = ["--format", "json"],
   runtime = nodePath,
-  cwd = box.cwd
+  cwd = box.cwd,
+  cliPath = varlockPath
 ): Promise<JvResult> => {
   const child = Bun.spawn(
-    [runtime, varlockPath, "load", "--path", box.cwd, ...args],
+    [runtime, cliPath, "load", "--path", box.cwd, ...args],
     {
       env: box.env,
       cwd,
@@ -74,16 +77,13 @@ const load = async (
   const exitCode = await child.exited;
   return { exitCode, stdout: await output, stderr: await errors };
 };
-const exportCount = async () => {
+const exportCount = async (env = "development") => {
   const [row] = await fixture.vault.db
     .select({ total: count() })
     .from(auditEvent)
     .innerJoin(environment, eq(auditEvent.environmentId, environment.id))
     .where(
-      and(
-        eq(auditEvent.action, "secret.export"),
-        eq(environment.slug, "development")
-      )
+      and(eq(auditEvent.action, "secret.export"), eq(environment.slug, env))
     );
   return row?.total ?? 0;
 };
@@ -103,12 +103,7 @@ test.each(["Node", "Bun"])(
   async (runtime) => {
     const box = await sandbox();
     await fixture.authenticate(box);
-    await schema(
-      box,
-      undefined,
-      undefined,
-      runtime === "Bun" ? sourcePath : pluginPath
-    );
+    await schema(box);
     const before = await exportCount();
     const output = await load(
       box,
@@ -148,6 +143,84 @@ test.each(["Node", "Bun"])(
           fixture.noLeaks({ exitCode: 0, stdout: content, stderr: "" });
         })
     );
+  },
+  15_000
+);
+
+test.each(["Node", "Bun"])(
+  "loads the plugin from a separate Varlock installation under %s",
+  async (runtime) => {
+    const box = await sandbox();
+    await fixture.authenticate(box);
+    await schema(box);
+    const externalPackage = pathModule.join(box.cwd, "node_modules/varlock");
+    await cp(
+      pathModule.dirname(pathModule.dirname(await realpath(varlockPath))),
+      externalPackage,
+      { recursive: true }
+    );
+    const before = await exportCount();
+    const output = await load(
+      box,
+      undefined,
+      runtime === "Node" ? nodePath : process.execPath,
+      box.cwd,
+      pathModule.join(externalPackage, "bin/cli.js")
+    );
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({
+      FOO: secretValues.FOO,
+      BAR: secretValues.BAR,
+      LOCAL: secretValues.FOO,
+    });
+    expect(await exportCount()).toBe(before + 1);
+    fixture.noLeaks(output, true);
+  },
+  15_000
+);
+
+test.each([
+  { rootInit: true, importedInit: false },
+  { rootInit: false, importedInit: true },
+  { rootInit: true, importedInit: true },
+])(
+  "isolates schemas in one load (root init: $rootInit, imported init: $importedInit)",
+  async ({ rootInit, importedInit }) => {
+    const box = await sandbox();
+    await fixture.authenticate(box);
+    const importedCwd = pathModule.join(box.cwd, "imported");
+    await mkdir(importedCwd);
+    await schema(
+      { ...box, cwd: importedCwd },
+      "IMPORTED=jv(FOO)\nIMPORTED_ALIAS=jv(FOO)\n",
+      importedInit ? "# @initJv(project=my-app, env=staging)\n" : ""
+    );
+    await schema(
+      box,
+      "ROOT=jv(FOO)\nROOT_ALIAS=jv(FOO)\n",
+      `${rootInit ? "# @initJv(project=my-app, env=development)\n" : ""}# @import(./imported/.env.schema)\n`
+    );
+    const developmentBefore = await exportCount();
+    const stagingBefore = await exportCount("staging");
+    const output = await load(box);
+    if (!(rootInit && importedInit)) {
+      expect(output.exitCode).not.toBe(0);
+      expect(output.stderr).toContain(
+        "jv() needs @initJv(project=..., env=...) in the schema header."
+      );
+      fixture.noLeaks(output);
+      return;
+    }
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({
+      ROOT: secretValues.FOO,
+      ROOT_ALIAS: secretValues.FOO,
+      IMPORTED: "private-staging-foo",
+      IMPORTED_ALIAS: "private-staging-foo",
+    });
+    expect(await exportCount()).toBe(developmentBefore + 1);
+    expect(await exportCount("staging")).toBe(stagingBefore + 1);
+    fixture.noLeaks(output, true);
   },
   15_000
 );

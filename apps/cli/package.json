@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build --compile src/index.ts --outfile dist/jv && bun build src/varlock-plugin.ts --target node --format esm --external varlock/plugin-lib --outfile dist/varlock-plugin.mjs",
+    "build": "bun build --compile src/index.ts --outfile dist/jv && bun build src/varlock-plugin.ts --target node --format cjs --external varlock/plugin-lib --outfile dist/varlock-plugin.cjs",
     "check-types": "tsc --noEmit",
     "test": "bun run build && bun test"
   },

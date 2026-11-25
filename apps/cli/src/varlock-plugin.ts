@@ -11,15 +11,16 @@ interface Configuration {
   project: Resolver;
   environment: Resolver;
   cwd: string;
+  exportPromise?: Promise<{
+    project: string;
+    environment: string;
+    values: Record<string, string>;
+  }>;
 }
-let configuration: Configuration | undefined;
-let exportPromise:
-  | Promise<{
-      project: string;
-      environment: string;
-      values: Record<string, string>;
-    }>
-  | undefined;
+const configurations = new WeakMap<
+  NonNullable<Resolver["dataSource"]>,
+  Configuration
+>();
 
 const parseValues = (stdout: string): Record<string, string> => {
   let values: unknown;
@@ -103,7 +104,13 @@ plugin.registerRootDecorator({
   name: "initJv",
   isFunction: true,
   process(args) {
-    if (configuration) {
+    const source = args.dataSource;
+    if (
+      !(source && "fullPath" in source && typeof source.fullPath === "string")
+    ) {
+      throw new SchemaError("@initJv must be declared in a schema file.");
+    }
+    if (configurations.has(source)) {
       throw new SchemaError("Use @initJv only once in the schema header.");
     }
     const project = args.objArgs?.project;
@@ -119,17 +126,11 @@ plugin.registerRootDecorator({
     ) {
       throw new SchemaError("Use @initJv(project=..., env=...).");
     }
-    const source = args.dataSource;
-    if (
-      !(source && "fullPath" in source && typeof source.fullPath === "string")
-    ) {
-      throw new SchemaError("@initJv must be declared in a schema file.");
-    }
-    configuration = {
+    configurations.set(source, {
       project,
       environment,
       cwd: pathModule.dirname(source.fullPath),
-    };
+    });
   },
 });
 
@@ -138,6 +139,8 @@ plugin.registerResolverFunction({
   impliesSensitive: true,
   argsSchema: { type: "array", arrayMinLength: 0, arrayMaxLength: 1 },
   process() {
+    const configuration =
+      this.dataSource && configurations.get(this.dataSource);
     if (!configuration) {
       throw new SchemaError(
         "jv() needs @initJv(project=..., env=...) in the schema header."
@@ -163,8 +166,8 @@ plugin.registerResolverFunction({
     return { key, config: configuration };
   },
   async resolve({ key, config }) {
-    exportPromise ??= loadValues(config);
-    const { project, environment, values } = await exportPromise;
+    config.exportPromise ??= loadValues(config);
+    const { project, environment, values } = await config.exportPromise;
     if (!Object.hasOwn(values, key)) {
       throw new ResolutionError(
         `${key} is not in ${project}/${environment}. Add it with jv set ${key}.`

@@ -9,16 +9,16 @@ The local `jv()` plugin loads an environment's secrets using your existing `jv l
 jv login --url https://vault.example.com
 ```
 
-Grant the machine's key the `inject` permission for the project and environment on the approval page. The plugin runs `jv export` once per load and shares the result between all `jv()` items. This creates one `secret.export` audit event for the environment, regardless of how many items use it.
+Grant the machine's key the `inject` permission for the project and environment on the approval page. The plugin runs `jv export` once per initialized schema per load and shares the result between that schema's `jv()` items. This creates one `secret.export` audit event for the environment, regardless of how many items use it.
 
 ## Load the local plugin
 
-Run `bun run build:cli` in the vault repository to build the CLI and the single-file plugin. Node requires the built `.mjs` file; Bun can also load the source `apps/cli/src/varlock-plugin.ts` directly.
+Run `bun run build:cli` in the vault repository to build the CLI and the single-file plugin. Use the built `apps/cli/dist/varlock-plugin.cjs` file under both Node and Bun, including in projects with their own Varlock installation.
 
-Point `@plugin()` at `apps/cli/dist/varlock-plugin.mjs` in your checkout of this repository. The path is **relative to the schema file**: adjust the example to match where your checkout lives. No npm plugin package is required. The single file runs under Node and Bun.
+Point `@plugin()` at `apps/cli/dist/varlock-plugin.cjs` in your checkout of this repository. The path is **relative to the schema file**: adjust the example to match where your checkout lives. No npm plugin package is required. The single file runs under Node and Bun.
 
 ```text title=".env.schema"
-# @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.mjs)
+# @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.cjs)
 # @initJv(project=my-app, env=development)
 # ---
 
@@ -30,10 +30,10 @@ LOCAL_TOKEN=jv(SERVICE_TOKEN)
 
 `jv()` uses the item's own name as the vault key. `jv(OTHER_NAME)` uses that static key instead, so `LOCAL_TOKEN` above resolves to `SERVICE_TOKEN`. Both forms imply sensitive values; the default `varlock load` output redacts them. An explicit `@sensitive=false` overrides that default. `varlock load --format json` prints resolved values, so treat that output as secrets.
 
-Declare `@initJv` exactly once in the schema header. Both `project` and `env` are required and may reference other schema items. For example, use `NODE_ENV` from the process environment to select the vault environment:
+Declare `@initJv` exactly once in each schema header that uses `jv()`. Each schema has its own configuration and in-memory export; imported schemas need their own initializer. Both `project` and `env` are required and may reference other schema items. For example, use `NODE_ENV` from the process environment to select the vault environment:
 
 ```text title=".env.schema"
-# @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.mjs)
+# @plugin(../jomans-vault/apps/cli/dist/varlock-plugin.cjs)
 # @initJv(project=my-app, env=$NODE_ENV)
 # ---
 
