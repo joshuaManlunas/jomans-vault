@@ -1,5 +1,7 @@
 **/node_modules
 .git
+.worktrees
+factory/jobs
 
 **/dist
 **/build
