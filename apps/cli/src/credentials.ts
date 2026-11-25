@@ -93,16 +93,19 @@ export const createCredentialStore = (
   env: NodeJS.ProcessEnv
 ): CredentialStore => {
   const keychain = createKeychain(env);
+  const unavailableKeychains = new Set<string>();
   const dir = configDir(env);
   const path = pathModule.join(dir, "credentials.json");
   return {
     get: async (url) => {
       try {
         const key = await keychain.get({ service: "jv", name: url });
+        unavailableKeychains.delete(url);
         if (key !== null) {
           return key;
         }
       } catch {
+        unavailableKeychains.add(url);
         // An unavailable OS keychain must not prevent fallback lookup.
       }
       const entries = await readEntries(path);
@@ -125,8 +128,13 @@ export const createCredentialStore = (
       let removed = false;
       try {
         removed = await keychain.delete({ service: "jv", name: url });
-      } catch {
-        // A missing OS keychain must not prevent fallback cleanup.
+      } catch (error) {
+        const fallbackRemoved = await removeEntry(path, url);
+        if (!unavailableKeychains.has(url)) {
+          throw error;
+        }
+        // A keychain unavailable at lookup must not prevent fallback logout.
+        return fallbackRemoved;
       }
       return (await removeEntry(path, url)) || removed;
     },

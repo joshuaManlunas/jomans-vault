@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import pathModule from "node:path";
 
 import { auditEvent } from "@jomans-vault/db/schema/vault";
@@ -319,6 +319,61 @@ test.each([200, 500])(
     );
     expect(output.stderr).toContain("EISDIR");
     expect(output.stderr).not.toContain("Logged out of");
+  }
+);
+
+test.each([
+  { status: 200, outcome: "The key was revoked." },
+  { status: 401, outcome: "The key was already invalid." },
+  { status: 500, outcome: "The key was NOT revoked." },
+])(
+  "keychain deletion failure after a successful read is reported for %j",
+  async ({ status, outcome }) => {
+    const box = await sandbox();
+    const keychain = pathModule.join(
+      box.env.JV_TEST_KEYCHAIN ?? "",
+      "keychain.json"
+    );
+    const saved = `${keychain}.saved`;
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async () => {
+        requests += 1;
+        await rename(keychain, saved);
+        await mkdir(keychain);
+        return new Response(null, { status });
+      },
+    });
+    servers.push(server);
+    const url = `http://127.0.0.1:${server.port}`;
+    const key = "jv_keychain_deletion_failure_never_print";
+    await stored(box, url, key);
+    await mkdir(configDir(box.env), { recursive: true });
+    const fallback = pathModule.join(configDir(box.env), "credentials.json");
+    await Bun.write(
+      fallback,
+      JSON.stringify({ [url]: "stale", "https://other.example": "keep" })
+    );
+    const output = await runJv(["logout", "--url", url], { env: box.env });
+    result(output, 1, key);
+    expect(requests).toBe(1);
+    expect(output.stderr).toContain(outcome);
+    expect(output.stderr).toContain(
+      "Could not remove the key from this machine:"
+    );
+    expect(output.stderr).toContain("EISDIR");
+    expect(output.stderr).not.toContain("removed from this machine");
+    expect(output.stderr).not.toContain("Logged out of");
+    expect(await Bun.file(fallback).json()).toEqual({
+      "https://other.example": "keep",
+    });
+    await rm(keychain, { recursive: true });
+    await rename(saved, keychain);
+    const entries = await box.keychain();
+    expect(entries.jv?.[url]).toBe(key);
+    expect(entries.jv?.["https://other.example"]).toBe("keep");
   }
 );
 
