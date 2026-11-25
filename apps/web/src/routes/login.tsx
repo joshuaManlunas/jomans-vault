@@ -6,8 +6,8 @@ import SignUpForm from "@/components/sign-up-form";
 import { safeReturnPath } from "@/lib/return-path";
 
 const RouteComponent = () => {
-  const { redirect } = Route.useSearch();
-  const [showSignIn, setShowSignIn] = useState(false);
+  const { redirect, mode } = Route.useSearch();
+  const [showSignIn, setShowSignIn] = useState(mode === "sign-in");
 
   return showSignIn ? (
     <SignInForm
@@ -24,10 +24,13 @@ const RouteComponent = () => {
 
 export const Route = createFileRoute("/login")({
   component: RouteComponent,
-  validateSearch: (search: Record<string, unknown>): { redirect?: string } => ({
+  validateSearch: (
+    search: Record<string, unknown>
+  ): { redirect?: string; mode?: "sign-in" } => ({
     redirect:
       typeof search.redirect === "string"
         ? safeReturnPath(search.redirect)
         : undefined,
+    mode: search.mode === "sign-in" ? "sign-in" : undefined,
   }),
 });

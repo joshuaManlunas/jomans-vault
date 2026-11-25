@@ -1,52 +1,38 @@
-import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { useSyncExternalStore } from "react";
 
-import { orpc } from "@/utils/orpc";
+import { SignedInHome } from "@/components/home/signed-in-home";
+import { SignedOutHome } from "@/components/home/signed-out-home";
+import { getUser } from "@/functions/get-user";
 
-const TITLE_TEXT = `
- ██████╗ ███████╗████████╗████████╗███████╗██████╗
- ██╔══██╗██╔════╝╚══██╔══╝╚══██╔══╝██╔════╝██╔══██╗
- ██████╔╝█████╗     ██║      ██║   █████╗  ██████╔╝
- ██╔══██╗██╔══╝     ██║      ██║   ██╔══╝  ██╔══██╗
- ██████╔╝███████╗   ██║      ██║   ███████╗██║  ██║
- ╚═════╝ ╚══════╝   ╚═╝      ╚═╝   ╚══════╝╚═╝  ╚═╝
+const subscribeToOrigin = () => () => {
+  // A document's origin is fixed for its lifetime.
+};
+const getClientOrigin = () => window.location.origin;
 
- ████████╗    ███████╗████████╗ █████╗  ██████╗██╗  ██╗
- ╚══██╔══╝    ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██║ ██╔╝
-    ██║       ███████╗   ██║   ███████║██║     █████╔╝
-    ██║       ╚════██║   ██║   ██╔══██║██║     ██╔═██╗
-    ██║       ███████║   ██║   ██║  ██║╚██████╗██║  ██╗
-    ╚═╝       ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
- `;
+// The public origin can match the auth URL that Varlock guards in SSR responses.
+const getServerOrigin = () => "";
 
 const HomeComponent = () => {
-  const healthCheck = useQuery(orpc.healthCheck.queryOptions());
+  const user = Route.useLoaderData();
+  const origin = useSyncExternalStore(
+    subscribeToOrigin,
+    getClientOrigin,
+    getServerOrigin
+  );
+  const loginCommand = origin ? `jv login --url ${origin}` : null;
 
-  let status = "Disconnected";
-  if (healthCheck.isLoading) {
-    status = "Checking...";
-  } else if (healthCheck.data) {
-    status = "Connected";
-  }
-
-  return (
-    <div className="container mx-auto max-w-3xl px-4 py-2">
-      <pre className="overflow-x-auto font-mono text-sm">{TITLE_TEXT}</pre>
-      <div className="grid gap-6">
-        <section className="rounded-lg border p-4">
-          <h2 className="mb-2 font-medium">API Status</h2>
-          <div className="flex items-center gap-2">
-            <div
-              className={`h-2 w-2 rounded-full ${healthCheck.data ? "bg-green-500" : "bg-red-500"}`}
-            />
-            <span className="text-muted-foreground text-sm">{status}</span>
-          </div>
-        </section>
-      </div>
-    </div>
+  return user ? (
+    <SignedInHome user={user} loginCommand={loginCommand} />
+  ) : (
+    <SignedOutHome loginCommand={loginCommand} mcpUrl={`${origin}/api/mcp`} />
   );
 };
 
 export const Route = createFileRoute("/")({
+  loader: async () => {
+    const session = await getUser();
+    return session ? { id: session.user.id, name: session.user.name } : null;
+  },
   component: HomeComponent,
 });
