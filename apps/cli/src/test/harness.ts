@@ -205,7 +205,10 @@ export const spawnJv = (
     }
     stderr += decoder.decode();
   })();
-  const stdout = new Response(process.stdout).text();
+  const stdout = (async () =>
+    new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+      await new Response(process.stdout).arrayBuffer()
+    ))();
   const exited = (async (): Promise<JvResult> => {
     const exitCode = await process.exited;
     await readStderr;
@@ -264,4 +267,55 @@ export const approvalRequestId = (stderr: string): string => {
     throw new Error("No approval request id in stderr");
   }
   return id;
+};
+
+export const runJvInTerminal = async (
+  args: string[],
+  {
+    env,
+    cwd,
+    input,
+    inputDelayMs = 200,
+  }: {
+    env: NodeJS.ProcessEnv;
+    cwd?: string;
+    input?: string;
+    inputDelayMs?: number;
+  }
+): Promise<{ exitCode: number; output: string }> => {
+  let output = "";
+  const decoder = new TextDecoder();
+  const ended = Promise.withResolvers<undefined>();
+  const child = Bun.spawn([binary, ...args], {
+    env,
+    cwd,
+    terminal: {
+      cols: 80,
+      rows: 24,
+      data: (_terminal, data) => {
+        output += decoder.decode(data, { stream: true });
+      },
+      exit: () => ended.resolve(),
+    },
+  });
+  const { terminal } = child;
+  if (!terminal) {
+    child.kill("SIGKILL");
+    throw new Error("Expected a pseudo-terminal");
+  }
+  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  const inputTimer =
+    input === undefined
+      ? undefined
+      : setTimeout(() => terminal.write(input), inputDelayMs);
+  try {
+    const exitCode = await child.exited;
+    await ended.promise;
+    output += decoder.decode();
+    return { exitCode, output };
+  } finally {
+    clearTimeout(timer);
+    clearTimeout(inputTimer);
+    terminal.close();
+  }
 };

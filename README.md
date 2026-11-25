@@ -116,7 +116,7 @@ For more details, see the guide on [Deploying with Docker Compose](https://www.b
 ```
 jomans-vault/
 ├── apps/
-│   ├── cli/         # Compiled jv CLI (login)
+│   ├── cli/         # Compiled jv CLI (login, link, run, ls, get, set, rm, history)
 │   └── web/         # Fullstack application (React + TanStack Start)
 ├── packages/
 │   ├── ui/          # Shared shadcn/ui components and styles
