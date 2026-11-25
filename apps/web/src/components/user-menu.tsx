@@ -25,7 +25,7 @@ const UserMenu = () => {
 
   if (!session) {
     return (
-      <Link to="/login">
+      <Link to="/login" search={{ mode: "sign-in" }}>
         <Button variant="outline">Sign In</Button>
       </Link>
     );
