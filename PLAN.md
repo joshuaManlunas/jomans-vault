@@ -77,6 +77,7 @@ Every procedure declares `.route({ method, path })` so it appears in the OpenAPI
 | History / rollback | `GET …/secrets/{key}/versions`, `POST …/secrets/{key}/rollback` | Rollback takes `{ version }` |
 | Projects / envs | CRUD under `/api/v1/projects` | Human sessions by default (see §3) |
 | CLI login requests | `POST /api/v1/login-requests`; read, approve, deny and poll under `/api/v1/login-requests/{id}` | Open and poll without sign-in; read, approve and deny require a user session |
+| Revoke current API key | `POST /api/v1/api-keys/current/revoke` | API key only; revokes the authenticating key and audits it as the actor |
 | List audit events | `GET /api/v1/audit` | Signed-in users only. Newest first, cursor paging, optional project and actor filters |
 
 Zod input schemas define the shape of a key: `^[A-Z_][A-Z0-9_]*$`, plus a maximum value size. They feed both validation and the generated OpenAPI spec.
