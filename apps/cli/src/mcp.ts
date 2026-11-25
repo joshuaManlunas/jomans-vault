@@ -14,15 +14,29 @@ const outputCap = 1_048_576;
 const defaultTimeoutSeconds = 120;
 const maximumTimeoutSeconds = 600;
 
-const capture = async (stream: ReadableStream<Uint8Array>) => {
+const capture = async (
+  stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal
+) => {
   const kept = new Uint8Array(outputCap);
   let length = 0;
   let truncated = false;
-  for await (const chunk of stream) {
-    const count = Math.min(chunk.length, outputCap - length);
-    kept.set(chunk.subarray(0, count), length);
-    length += count;
-    truncated ||= count < chunk.length;
+  try {
+    await stream.pipeTo(
+      new WritableStream<Uint8Array>({
+        write(chunk) {
+          const count = Math.min(chunk.length, outputCap - length);
+          kept.set(chunk.subarray(0, count), length);
+          length += count;
+          truncated ||= count < chunk.length;
+        },
+      }),
+      { signal }
+    );
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
   }
   return {
     text: new TextDecoder().decode(kept.subarray(0, length)),
@@ -112,16 +126,18 @@ export const mcp = async ({
       throw new Error(`Could not start ${command[0]}.`);
     }
     children.add(child);
+    const output = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
+      output.abort();
     }, timeoutSeconds * 1000);
     try {
       const [code, stdout, stderr] = await Promise.all([
         child.exited,
-        capture(child.stdout),
-        capture(child.stderr),
+        capture(child.stdout, output.signal),
+        capture(child.stderr, output.signal),
       ]);
       const signal = child.signalCode;
       const exitCode = signal

@@ -331,6 +331,48 @@ test("drains capped streams, replaces invalid UTF-8, enforces timeout and report
   );
 }, 15_000);
 
+test("timeout cancels inherited pipes after the direct child exits", async () => {
+  const box = await sandbox();
+  await authenticate(box);
+  const { client } = await connectMcp(box, flags);
+  const file = pathModule.join(box.cwd, "descendant.pid");
+  const started = Date.now();
+  try {
+    const output = await runScript(
+      client,
+      `import { spawn } from 'node:child_process';
+const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},8000)'], {
+  detached: true, stdio: ['ignore', 'inherit', 'inherit']
+});
+child.unref();
+await Bun.write(${JSON.stringify(file)}, String(child.pid));
+console.log('started'); console.error('background');`,
+      { timeoutSeconds: 1 }
+    );
+    expect(output.isError).toBeUndefined();
+    expect(output.structuredContent).toEqual({
+      exitCode: 0,
+      stdout: "started\n",
+      stderr: "background\n",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: true,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+    const listed = await client.callTool({ name: "list", arguments: {} });
+    expect(listed.isError).toBeUndefined();
+    noLeaks(output);
+  } finally {
+    if (await Bun.file(file).exists()) {
+      try {
+        process.kill(Number(await Bun.file(file).text()), "SIGKILL");
+      } catch (error) {
+        expect(error).toHaveProperty("code", "ESRCH");
+      }
+    }
+  }
+}, 15_000);
+
 test("list and set return metadata only and preserve validation and permission messages", async () => {
   const box = await sandbox();
   await authenticate(box, ["read", "inject", "write"], {
