@@ -1,0 +1,195 @@
+---
+title: CLI reference
+description: Commands, flags, permissions and exit codes for jv.
+---
+
+Build the executable with `bun run build:cli` from the repository root. The binary is `apps/cli/dist/jv`; the examples below assume it is on your `PATH` as `jv`.
+
+## Configuration
+
+Vault URL resolution uses the first available value in this order:
+
+1. `--url`
+2. `JV_URL`
+3. The `url` in the nearest `jv.json`
+4. The last login URL, remembered in the config directory's `config.json`
+
+URLs must use HTTP or HTTPS; trailing slashes are stripped. The config directory is `$XDG_CONFIG_HOME/jv` when `XDG_CONFIG_HOME` is absolute, otherwise `~/.config/jv`.
+
+Starting in the current directory, `jv` walks upward to find the nearest `jv.json`. `--project` and `--env` override its project and environment separately. Secret commands and `run` need both a project and an environment. Project and environment slugs contain 1 to 64 lowercase letters, digits or hyphens (`[a-z0-9-]`).
+
+Secret keys contain 1 to 255 characters and match `^[A-Z_][A-Z0-9_]*$`.
+
+> **Plaintext and deletion:** `get` prints a plaintext secret to stdout. `run` injects plaintext values into the child process's environment. `rm` deletes without confirmation.
+
+## login
+
+```text
+jv login [--url <url>] [--project <p>] [--env <e>] [--no-browser]
+```
+
+Log this machine in to a vault. Opens `<url>/cli/authorize?request=<id>` in a browser and polls for approval. The approved key is stored in the OS keychain, or in a private file with a warning when the keychain is unavailable. A successful login remembers the vault URL.
+
+Flags: `--url`, `--project`, `--env`, `--no-browser`, `--help`. Project and environment pre-fill the approval scope; an environment requires a project. `--no-browser` prints the approval link without opening it.
+
+Required key permission: none. The approval page grants the new key's scope and permissions.
+
+```sh
+jv login --url https://vault.example.com --project my-app --env development
+```
+
+## logout
+
+```text
+jv logout [--url <url>]
+```
+
+Revoke the stored key via `POST /api/v1/api-keys/current/revoke` and remove it locally. If the vault cannot be reached, the local key is still removed; the command exits 1 and warns that it was not revoked. A key the vault already rejects is removed successfully. With no stored key, this succeeds without changing anything.
+
+Flags: `--url`, `--help`. Required key permission: none.
+
+```sh
+jv logout --url https://vault.example.com
+```
+
+## link
+
+```text
+jv link <project> --env <env> [--url <url>]
+```
+
+Write `jv.json` in the current directory with `project`, `env` and an optional `url`. This file contains no secret values and is safe to commit. The URL is written only when `--url` is supplied.
+
+Flags: `--env` (required), `--url`, `--help`. Required key permission: none. The project is a positional argument.
+
+```sh
+jv link my-app --env development --url https://vault.example.com
+```
+
+## run
+
+```text
+jv run [--project <p>] [--env <e>] [--url <u>] -- <cmd> [args...]
+```
+
+Fetch the environment's values from `GET /api/v1/projects/{project}/envs/{env}/export` and start the command after `--`. Vault values override matching inherited environment variables. Values are injected into the child process without being written to disk by `jv`.
+
+Flags before `--`: `--project`, `--env`, `--url`, `--help`. Arguments after `--` belong to the child command. Required key permission: `inject`, scoped to the project and environment.
+
+```sh
+jv run --project my-app --env development -- bun run dev
+```
+
+## ls
+
+```text
+jv ls [--project <p>] [--env <e>] [--url <u>]
+```
+
+List secret keys, kinds, versions and update times. No secret values are printed.
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `read`, scoped to the project and environment.
+
+```sh
+jv ls --project my-app --env development
+```
+
+## get
+
+```text
+jv get <KEY> [--project <p>] [--env <e>] [--url <u>]
+```
+
+Print only the secret value to stdout. Adds a newline only when stdout is a terminal; piped or redirected output preserves the value's bytes without an added newline.
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `reveal`, scoped to the project and environment.
+
+```sh
+jv get DATABASE_URL --project my-app --env development
+```
+
+## set
+
+```text
+jv set <KEY> [<value> | -] [--project <p>] [--env <e>] [--url <u>]
+```
+
+Store a value, creating a new version. Values must be valid UTF-8 text and at most 64 KiB (65,536 bytes).
+
+`jv set KEY -` reads stdin unchanged, including a trailing newline. Use `printf '%s'` to pipe a value without adding a newline:
+
+```sh
+printf '%s' "$VALUE" | jv set DATABASE_URL - --project my-app --env development
+```
+
+With no value argument on a terminal, `set` prompts with hidden input. An empty entry exits 1 without storing anything; Ctrl-C exits 130. With no value argument and stdin not a terminal, it exits 2 (usage error).
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `write`, scoped to the project and environment.
+
+```sh
+jv set DATABASE_URL --project my-app --env development
+```
+
+## rm
+
+```text
+jv rm <KEY> [--project <p>] [--env <e>] [--url <u>]
+```
+
+Remove the secret without asking for confirmation.
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `delete`, scoped to the project and environment.
+
+```sh
+jv rm OLD_TOKEN --project my-app --env development
+```
+
+## history
+
+```text
+jv history <KEY> [--project <p>] [--env <e>] [--url <u>]
+```
+
+List the secret's versions with creation times and actor types and IDs. No version values are printed.
+
+Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `read`, scoped to the project and environment.
+
+```sh
+jv history DATABASE_URL --project my-app --env development
+```
+
+## help
+
+```text
+jv help
+jv --help
+```
+
+Print usage, commands and flags. `--help` also shows this help for a supported command. Required key permission: none.
+
+```sh
+jv help
+jv get --help
+```
+
+## Flags
+
+| Flag | Commands | Meaning |
+| --- | --- | --- |
+| `--url` | `login`, `logout`, `link`, `run`, `ls`, `get`, `set`, `rm`, `history` | Select the vault URL; on `link`, save it in `jv.json`. |
+| `--project` | `login`, `run`, `ls`, `get`, `set`, `rm`, `history` | Override the linked project; on `login`, pre-fill the approval scope. |
+| `--env` | `login`, `link`, `run`, `ls`, `get`, `set`, `rm`, `history` | Override the linked environment; required on `link`; on `login`, pre-fill the approval scope. |
+| `--no-browser` | `login` | Print the approval URL without opening a browser. |
+| `--help` | All commands above, or `jv --help` | Print help. `jv help` is the equivalent command. |
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. |
+| `1` | Failed command, such as a rejected request, unreachable vault or failed credential storage. |
+| `2` | Usage error, such as invalid arguments, keys, slugs, URL or value text. |
+
+`run` returns the child command's exit code. If the command cannot start, it returns `127`. If the child is killed by signal N, it returns `128 + N`. Failures before starting the child use the normal command exit codes.
+
+Cancelling an interactive `set` prompt with Ctrl-C returns `130`.

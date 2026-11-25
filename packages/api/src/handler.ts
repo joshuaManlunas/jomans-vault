@@ -3,9 +3,9 @@ import { parseMasterKey } from "@jomans-vault/crypto";
 import type { Database } from "@jomans-vault/db";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
-import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 
 import { createContext } from "./context";
+import { openApiSchemaConverters, openApiSpecOptions } from "./openapi";
 import { appRouter } from "./routers/index";
 
 export interface VaultApiHandlerOptions {
@@ -26,8 +26,8 @@ export const createVaultApiHandler = ({
   const handler = new OpenAPIHandler(appRouter, {
     plugins: [
       new OpenAPIReferencePlugin({
-        schemaConverters: [new ZodToJsonSchemaConverter()],
-        specGenerateOptions: { servers: [{ url: "/api/v1" }] },
+        schemaConverters: openApiSchemaConverters,
+        specGenerateOptions: openApiSpecOptions,
       }),
     ],
   });

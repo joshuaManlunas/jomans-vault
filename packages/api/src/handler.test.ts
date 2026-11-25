@@ -31,6 +31,7 @@ import * as z from "zod";
 
 import { createContext } from "./context";
 import { createVaultApiHandler } from "./handler";
+import { generateOpenApiSpec } from "./openapi";
 import { appRouter } from "./routers/index";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -157,6 +158,12 @@ test("private data accepts the cookie from real Better Auth sign-up", async () =
     message: "This is private",
     user: { email },
   });
+});
+
+test("the served OpenAPI spec equals the docs generator output", async () => {
+  const response = await handler(new Request(`${baseURL}/api/v1/spec.json`));
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(await generateOpenApiSpec());
 });
 
 test("the generated OpenAPI spec includes all REST operations", async () => {

@@ -13,6 +13,7 @@ import {
 } from "fumadocs-ui/layouts/docs/page";
 import { Suspense, use } from "react";
 
+import { APIPage } from "@/components/api-page";
 import { useMDXComponents } from "@/components/mdx";
 import { baseOptions } from "@/lib/layout.shared";
 import { getPageImageUrl, getPageMarkdownUrl, gitConfig } from "@/lib/shared";
@@ -23,7 +24,9 @@ export const Route = createFileRoute("/docs/$")({
   loader: async ({ params }) => {
     const slugs = params._splat?.split("/") ?? [];
     const data = await loader({ data: slugs });
-    await docs.getPage(data.path)?.preload();
+    if (data.type === "docs") {
+      await docs.getPage(data.path)?.preload();
+    }
     return data;
   },
   head: ({ loaderData }) => ({
@@ -42,11 +45,23 @@ const loader = createServerFn({
     const page = source.getPage(slugs);
     if (!page) throw notFound();
 
-    return {
-      path: page.path,
+    const common = {
       markdownUrl: getPageMarkdownUrl(page).url,
       imageUrl: getPageImageUrl(page).url,
       pageTree: await source.serializePageTree(source.getPageTree()),
+    };
+    if (page.type === "openapi") {
+      return {
+        ...common,
+        type: "openapi" as const,
+        title: page.data.title,
+        props: page.data.getOpenAPIPageProps(),
+      };
+    }
+    return {
+      ...common,
+      type: "docs" as const,
+      path: page.path,
     };
   });
 
@@ -76,15 +91,22 @@ function Content({ path, markdownUrl }: { path: string; markdownUrl: string }) {
 }
 
 function Page() {
-  const { pageTree, path, markdownUrl } = useFumadocsLoader(
-    Route.useLoaderData()
-  );
+  const page = useFumadocsLoader(Route.useLoaderData());
 
   return (
-    <DocsLayout {...baseOptions()} tree={pageTree}>
-      <Link to={markdownUrl} hidden />
+    <DocsLayout {...baseOptions()} tree={page.pageTree}>
+      <Link to={page.markdownUrl} hidden />
       <Suspense>
-        <Content path={path} markdownUrl={markdownUrl} />
+        {page.type === "openapi" ? (
+          <DocsPage full>
+            <DocsTitle>{page.title}</DocsTitle>
+            <DocsBody>
+              <APIPage {...page.props} />
+            </DocsBody>
+          </DocsPage>
+        ) : (
+          <Content path={page.path} markdownUrl={page.markdownUrl} />
+        )}
       </Suspense>
     </DocsLayout>
   );

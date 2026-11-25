@@ -5,13 +5,14 @@
   "sideEffects": false,
   "scripts": {
     "dev": "vite dev --port=4000",
-    "build": "vite build",
+    "build": "NODE_ENV=production vite build",
     "start": "serve .output/public --config ../../serve.json",
     "preview": "vite preview",
     "types:check": "tsc --noEmit",
     "lint": "oxlint"
   },
   "dependencies": {
+    "@jomans-vault/api": "workspace:*",
     "@tanstack/react-router": "1.170.46",
     "@tanstack/react-router-devtools": "1.167.3",
     "@tanstack/react-start": "1.169.5",
@@ -19,6 +20,7 @@
     "cn": "^0.5.2",
     "fumadocs-core": "16.19.0",
     "fumadocs-mdx": "15.6.1",
+    "fumadocs-openapi": "12.6.7",
     "fumadocs-ui": "npm:@fumadocs/base-ui@16.19.0",
     "lucide-react": "^1.71.0",
     "react": "^19.3.1",
