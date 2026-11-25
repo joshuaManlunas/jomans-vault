@@ -1,11 +1,139 @@
 ---
 title: Deploy and back up
-description: Start the production Compose stack and back up and restore its database and master key.
+description: Complete production deployment guide for Joman's Vault (web app, Postgres, docs site, and CLI) on a Linux VPS, plus backup, restore, and upgrade runbooks.
 ---
 
-## Start production
+This guide covers deploying the full Joman's Vault stack on a single Linux VPS (Ubuntu 24.04 LTS or Debian 12):
 
-From the repository root, run:
+| Component | Path | How it runs in production | Public URL (example) |
+| --- | --- | --- | --- |
+| Vault web app + REST/oRPC/MCP API | `apps/web` | Docker container on `127.0.0.1:3001` behind Caddy | `https://vault.example.com` |
+| PostgreSQL 18 | `postgres:18` | Docker container on internal Compose network only (no host port) | Not exposed |
+| Documentation site (Fumadocs) | `apps/fumadocs` | Pre-rendered static files served by Caddy | `https://docs.example.com` |
+| `jv` CLI & Varlock plugin | `apps/cli` | Compiled native binary installed on developer / agent machines | Connects to `https://vault.example.com` |
+
+## 1. Prerequisites and VPS hardening
+
+### Hardware and software
+
+- **VPS:** 2 vCPU, 2–4 GB RAM, 20+ GB SSD (Ubuntu 24.04 LTS or Debian 12).
+- **DNS:** Two `A` (and optional `AAAA`) records pointing at your VPS IP:
+  - `vault.example.com`
+  - `docs.example.com`
+- **Software on the VPS:**
+  - Docker Engine + **Docker Compose v2.24 or later** (required for `ports: !reset []` in `docker-compose.prod.yml`)
+  - Bun 1.x (for building `apps/fumadocs`, running migrations, or building `jv`)
+  - Caddy (automatic Let's Encrypt TLS reverse proxy and static file server)
+
+### Baseline server setup
+
+Run on the VPS as a sudo-capable non-root user (e.g. `deploy`):
+
+```sh
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y ca-certificates curl git ufw fail2ban unattended-upgrades
+
+# Firewall: allow SSH, HTTP (for ACME/redirect), and HTTPS only
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+Install Docker (official repo, ensuring Compose v2.24+), Bun, and Caddy:
+
+```sh
+# Docker
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker compose version   # must be >= 2.24.0
+
+# Bun
+curl -fsSL https://bun.sh/install | bash
+export PATH="$HOME/.bun/bin:$PATH"
+
+# Caddy (Debian / Ubuntu)
+sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt-get update && sudo apt-get install -y caddy
+```
+
+## 2. Clone the repository
+
+```sh
+sudo mkdir -p /opt/jomans-vault
+sudo chown "$USER:$USER" /opt/jomans-vault
+git clone https://github.com/joshuaManlunas/jomans-vault.git /opt/jomans-vault
+cd /opt/jomans-vault
+```
+
+## 3. Generate secrets and environment file
+
+Create `apps/web/.env` with strict owner-only permissions (`0600`). Generate fresh random values for every secret:
+
+```sh
+# Generate strong random secrets
+echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)"
+echo "VAULT_MASTER_KEY=$(openssl rand -base64 32)"
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+```
+
+Write `/opt/jomans-vault/apps/web/.env`:
+
+```sh
+(
+  umask 077
+  cat > /opt/jomans-vault/apps/web/.env <<'EOF'
+NODE_ENV=production
+
+# Public HTTPS origin of the vault (must match your Caddy domain)
+BETTER_AUTH_URL=https://vault.example.com
+CORS_ORIGIN=https://vault.example.com
+
+# Optional: URL opened by the "Docs" link in the web app header (build-time Vite var)
+VITE_DOCS_URL=https://docs.example.com/docs
+
+# 32+ character signing secret for Better Auth sessions
+BETTER_AUTH_SECRET=REPLACE_WITH_64_HEX_CHARS
+
+# Base64-encoded 32-byte master KEK that wraps per-project DEKs
+VAULT_MASTER_KEY=REPLACE_WITH_BASE64_32_BYTES
+
+# Strong Postgres password (used by both postgres and web containers)
+POSTGRES_PASSWORD=REPLACE_WITH_48_HEX_CHARS
+DATABASE_URL=postgresql://postgres:REPLACE_WITH_48_HEX_CHARS@postgres:5432/jomans-vault
+EOF
+  chmod 600 /opt/jomans-vault/apps/web/.env
+)
+```
+
+> **Back up `VAULT_MASTER_KEY` right now.** Copy it into a password manager or offline medium kept strictly separate from database backups. Losing `VAULT_MASTER_KEY` permanently loses every stored secret value.
+
+## 4. Create a VPS Compose override
+
+The base `docker-compose.yml` binds `web` to `3001:3001` on all interfaces and defaults `BETTER_AUTH_URL` and `CORS_ORIGIN` to `http://localhost:3001`. On a VPS behind Caddy, add a local override file (`docker-compose.vps.yml`, gitignored or kept alongside the repo) that binds `web` to loopback only and forwards your HTTPS origin from `apps/web/.env`:
+
+```yaml
+# /opt/jomans-vault/docker-compose.vps.yml
+services:
+  web:
+    ports: !reset
+      - "127.0.0.1:3001:3001"
+    environment:
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL in apps/web/.env}
+      CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN in apps/web/.env}
+      VITE_DOCS_URL: ${VITE_DOCS_URL:-https://docs.example.com/docs}
+```
+
+## 5. Start production and run migrations
+
+### Start the containers
+
+For a local production-like run (loopback defaults), run from the repository root:
 
 ```sh
 bun run docker:up:prod
@@ -17,11 +145,139 @@ The equivalent Compose command is:
 docker compose -f docker-compose.yml -f docker-compose.key.yml -f docker-compose.prod.yml --env-file apps/web/.env up -d --build
 ```
 
+On your VPS, include `docker-compose.vps.yml`:
+
+```sh
+cd /opt/jomans-vault
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.key.yml \
+  -f docker-compose.prod.yml \
+  -f docker-compose.vps.yml \
+  --env-file apps/web/.env \
+  up -d --build
+```
+
 Set `VAULT_MASTER_KEY` in `apps/web/.env` or export it in the host environment. An exported value takes precedence. Both `bun run docker:up` and `bun run docker:up:prod` fail before starting containers if the key is unset or empty.
 
 The production override uses `ports: !reset`, which requires Docker Compose 2.24 or later. Use `bun run docker:logs` to follow logs and `bun run docker:down` to stop this stack.
 
-## Postgres is not on the host
+### Apply database migrations
+
+`apps/web/Dockerfile` does not run Drizzle migrations automatically on container boot. Apply migrations inside the `web` container (which already has the repo and reaches `postgres:5432` over the internal Compose network):
+
+```sh
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.key.yml \
+  -f docker-compose.prod.yml \
+  -f docker-compose.vps.yml \
+  --env-file apps/web/.env \
+  exec web sh -c 'cd /app/packages/db && npx drizzle-kit migrate'
+```
+
+Verify both containers are healthy:
+
+```sh
+docker compose ps
+curl -fsS -I http://127.0.0.1:3001/
+```
+
+## 6. Build the documentation site (`apps/fumadocs`)
+
+`apps/fumadocs` pre-renders to static assets under `apps/fumadocs/.output/public`, so Caddy can serve it directly with zero runtime process:
+
+```sh
+cd /opt/jomans-vault
+bun install --frozen-lockfile
+cd apps/fumadocs
+bun run build
+```
+
+Verify the static output exists:
+
+```sh
+ls -la /opt/jomans-vault/apps/fumadocs/.output/public
+```
+
+Make sure the `caddy` user can traverse `/opt/jomans-vault/apps/fumadocs/.output/public` (default `755` directory / `644` file permissions). Keep `apps/web/.env` at `600` owned by your deploy user so Caddy cannot read it.
+
+## 7. Configure Caddy (HTTPS reverse proxy + docs hosting)
+
+Edit `/etc/caddy/Caddyfile`:
+
+```text
+vault.example.com {
+  encode zstd gzip
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
+
+  reverse_proxy 127.0.0.1:3001 {
+    header_up Host {host}
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+  }
+}
+
+docs.example.com {
+  encode zstd gzip
+  root * /opt/jomans-vault/apps/fumadocs/.output/public
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    -Server
+  }
+
+  file_server
+  try_files {path} {path}/index.html /index.html
+}
+```
+
+Validate and reload Caddy:
+
+```sh
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl enable --now caddy
+sudo systemctl reload caddy
+```
+
+Caddy automatically provisions and renews Let's Encrypt TLS certificates for both domains.
+
+## 8. Connect clients (`jv` CLI, Varlock, and MCP)
+
+On developer machines, CI runners, or agent hosts:
+
+### Build and install `jv`
+
+```sh
+bun install --frozen-lockfile
+bun run build:cli
+# Binary: apps/cli/dist/jv
+# Varlock plugin: apps/cli/dist/varlock-plugin.cjs
+install -m 0755 apps/cli/dist/jv "$HOME/.local/bin/jv"
+```
+
+### Log in to your production vault
+
+```sh
+jv login --url https://vault.example.com
+```
+
+This opens `https://vault.example.com/cli/authorize?request=...` in your browser so you can sign in and approve a scoped API key for that machine.
+
+### Point MCP clients at `/api/mcp`
+
+Configure remote MCP clients with `https://vault.example.com/api/mcp` and a scoped API key (`Authorization: Bearer <key>` or `x-api-key: <key>`). See the [MCP guide](/docs/mcp) for client config examples.
+
+## 9. Postgres is not on the host
 
 The production stack does not publish host port 5432. The web service reaches `postgres:5432` over the Compose network. Open a database shell through the container:
 
@@ -29,11 +285,21 @@ The production stack does not publish host port 5432. The web service reaches `p
 docker exec -it jomans-vault-postgres psql -U postgres jomans-vault
 ```
 
-## Back up the master key
+Confirm nothing is listening publicly on `3001` or `5432`:
+
+```sh
+ss -tlnp | grep -E ':(3001|5432|80|443)\b'
+```
+
+You should see `127.0.0.1:3001`, `*:80`, and `*:443` — never `0.0.0.0:3001` or `*:5432`.
+
+## 10. Back up and restore
+
+### Back up the master key
 
 Copy the exact `VAULT_MASTER_KEY` value from `apps/web/.env`, or wherever the host environment gets it, into storage kept separate from database backups, such as a password manager or offline media. To restore the key, put that same value back in `apps/web/.env` or the host environment.
 
-## Back up the database
+### Back up the database
 
 Create a custom-format database dump outside the repository, in an owner-only directory and file:
 
@@ -49,12 +315,20 @@ Create a custom-format database dump outside the repository, in an owner-only di
 
 Database backups contain sensitive account data and authentication tokens even without the master key. Encrypt backups before copying them to backup storage and restrict access to authorized operators. Keep them outside the repository and separate from the master key.
 
-## Restore the database
+#### Optional: automated daily backup cron
+
+Install a daily cron job (`crontab -e`) that keeps timestamped dumps and prunes files older than 14 days (then ship encrypted copies off-box with `age`, `gpg`, or `restic`):
+
+```text
+15 3 * * * umask 077 && mkdir -p "$HOME/jomans-vault-backups" && docker exec jomans-vault-postgres pg_dump -U postgres -Fc jomans-vault > "$HOME/jomans-vault-backups/jomans-vault-$(date +\%F).dump" && find "$HOME/jomans-vault-backups" -name 'jomans-vault-*.dump' -mtime +14 -delete
+```
+
+### Restore the database
 
 Start Postgres alone with the production port override. This command does not require the master key:
 
 ```sh
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait postgres
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file apps/web/.env up -d --wait postgres
 ```
 
 Restore the dump into the database:
@@ -66,11 +340,63 @@ docker exec -i jomans-vault-postgres pg_restore -U postgres -d jomans-vault --cl
 With the original master key restored, start the full production stack:
 
 ```sh
-bun run docker:up:prod
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.key.yml \
+  -f docker-compose.prod.yml \
+  -f docker-compose.vps.yml \
+  --env-file apps/web/.env \
+  up -d --build
 ```
 
-## Back up both, keep them apart
+### Back up both, keep them apart
 
 Stored secret values in the database cannot be decrypted without the master key, and the key without the database has nothing to decrypt. Back up both as part of the same recovery plan and store them separately.
 
 **Losing `VAULT_MASTER_KEY` permanently loses every stored secret value. No recovery path exists.**
+
+## 11. Upgrading in place
+
+1. Take a fresh database backup (see [Back up the database](#back-up-the-database)).
+2. Pull the latest code and rebuild the web container:
+
+   ```sh
+   cd /opt/jomans-vault
+   git pull --ff-only origin main
+   docker compose \
+     -f docker-compose.yml \
+     -f docker-compose.key.yml \
+     -f docker-compose.prod.yml \
+     -f docker-compose.vps.yml \
+     --env-file apps/web/.env \
+     up -d --build
+   ```
+
+3. Apply any new database migrations:
+
+   ```sh
+   docker compose \
+     -f docker-compose.yml \
+     -f docker-compose.key.yml \
+     -f docker-compose.prod.yml \
+     -f docker-compose.vps.yml \
+     --env-file apps/web/.env \
+     exec web sh -c 'cd /app/packages/db && npx drizzle-kit migrate'
+   ```
+
+4. Rebuild the static docs site (Caddy serves the updated files immediately with no reload needed):
+
+   ```sh
+   cd /opt/jomans-vault
+   bun install --frozen-lockfile
+   (cd apps/fumadocs && bun run build)
+   ```
+
+## 12. Post-deploy verification checklist
+
+- `curl -fsS -I https://vault.example.com/` returns `200` over HTTPS with HSTS and `X-Frame-Options: DENY`.
+- `curl -fsS -I https://docs.example.com/docs` returns `200` and serves the docs site.
+- `curl -sS -o /dev/null -w "%{http_code}\n" https://vault.example.com/api/mcp` returns `401` (unauthenticated MCP requests refused).
+- `ss -tlnp` confirms port `5432` is not bound on the host and port `3001` is bound to `127.0.0.1` only.
+- Create your account at `https://vault.example.com/login`, create a test project and secret, verify reveal/audit log, and test `jv login --url https://vault.example.com`.
+- Verify `VAULT_MASTER_KEY` is backed up separately from your database dump.
