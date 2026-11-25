@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import pathModule from "node:path";
 
@@ -141,8 +141,19 @@ export const findLink = async (
 };
 
 export const writeLink = async (dir: string, link: Link): Promise<void> => {
-  await writeFile(
-    pathModule.join(dir, "jv.json"),
-    `${JSON.stringify({ project: link.project, env: link.env, url: link.url }, null, 2)}\n`
-  );
+  const temporaryPath = pathModule.join(dir, `.jv-${crypto.randomUUID()}.tmp`);
+  const file = await open(temporaryPath, "wx");
+  try {
+    try {
+      await file.writeFile(
+        `${JSON.stringify({ project: link.project, env: link.env, url: link.url }, null, 2)}\n`
+      );
+    } finally {
+      await file.close();
+    }
+    // Replace the directory entry without following an existing link.
+    await rename(temporaryPath, pathModule.join(dir, "jv.json"));
+  } finally {
+    await rm(temporaryPath, { force: true });
+  }
 };

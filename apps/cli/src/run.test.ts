@@ -1,10 +1,13 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import {
+  link as hardlink,
+  lstat,
   mkdir,
   readFile,
   readdir,
   realpath,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import pathModule from "node:path";
@@ -239,6 +242,54 @@ test("link writes only slugs and an explicit normalized URL, replaces locally an
       pathModule.join(box.env.XDG_CONFIG_HOME ?? "", "jv/config.json")
     ).exists()
   ).toBe(false);
+});
+
+test.each(["symlink", "dangling symlink", "hardlink"])(
+  "link replaces a %s without changing its target",
+  async (kind) => {
+    const box = await sandbox();
+    const target = pathModule.join(pathModule.dirname(box.cwd), "target.json");
+    const path = pathModule.join(box.cwd, "jv.json");
+    if (kind !== "dangling symlink") {
+      await writeFile(target, "outside file stays unchanged\n");
+    }
+    await (kind === "hardlink"
+      ? hardlink(target, path)
+      : symlink(pathModule.relative(box.cwd, target), path));
+
+    await link(box);
+
+    const info = await lstat(path);
+    expect(info.isFile()).toBe(true);
+    expect(await Bun.file(path).json()).toEqual({
+      project: "my-app",
+      env: "development",
+    });
+    if (kind === "dangling symlink") {
+      expect(await Bun.file(target).exists()).toBe(false);
+    } else {
+      expect(await readFile(target, "utf-8")).toBe(
+        "outside file stays unchanged\n"
+      );
+    }
+    expect(await readdir(box.cwd)).toEqual(["jv.json"]);
+  }
+);
+
+test("link cleans up its temporary file when replacement fails", async () => {
+  const box = await sandbox();
+  const path = pathModule.join(box.cwd, "jv.json");
+  await mkdir(path);
+  const before = await snapshot(pathModule.dirname(box.cwd));
+
+  const output = await runJv(["link", "my-app", "--env", "development"], box);
+
+  expect(output.exitCode).toBe(1);
+  noLeaks(output);
+  const info = await lstat(path);
+  expect(info.isDirectory()).toBe(true);
+  expect(await readdir(box.cwd)).toEqual(["jv.json"]);
+  expect(await snapshot(pathModule.dirname(box.cwd))).toEqual(before);
 });
 
 test.each(
