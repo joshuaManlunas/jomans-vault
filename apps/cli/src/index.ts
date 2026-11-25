@@ -13,11 +13,24 @@ import { UsageError } from "./errors";
 import { login } from "./login";
 import { logout } from "./logout";
 import { run } from "./run";
+import { get, history, ls, rm, set } from "./secrets";
+
+const secretCommands = { ls, get, set, rm, history };
+type SecretCommand = keyof typeof secretCommands;
+const isSecretCommand = (
+  command: string | undefined
+): command is SecretCommand =>
+  command !== undefined && Object.hasOwn(secretCommands, command);
 
 const usage = `Usage: jv link <project> --env <env> [--url <url>]
        jv run [--project <p>] [--env <e>] [--url <u>] -- <cmd> [args...]
        jv login [--url <url>] [--project <p>] [--env <e>] [--no-browser]
        jv logout [--url <url>]
+       jv ls [--project <p>] [--env <e>] [--url <u>]
+       jv get <KEY> [--project <p>] [--env <e>] [--url <u>]
+       jv set <KEY> [<value> | -] [--project <p>] [--env <e>] [--url <u>]
+       jv rm <KEY> [--project <p>] [--env <e>] [--url <u>]
+       jv history <KEY> [--project <p>] [--env <e>] [--url <u>]
        jv --help
        jv help
 
@@ -26,6 +39,14 @@ Commands:
   logout   Log this machine out: revoke its key and remove it
   link     Link this directory to a project and environment
   run      Start a command with vault values in its environment
+  ls       List secret keys, kinds and versions
+  get      Print only a secret value
+  set      Store a secret value
+  rm       Remove a secret without confirmation
+  history  List a secret's versions
+
+For set, - stores stdin unchanged, including a trailing newline.
+Use printf '%s' to pipe a value without a trailing newline.
 
 Flags:
   --url <url>    Vault URL (otherwise JV_URL, jv.json or the last login URL)
@@ -72,7 +93,10 @@ const showHelp = (args: CliArgs, separator: number): boolean => {
       separator === -1
     );
   }
-  return !command || ["login", "link", "run"].includes(command);
+  return (
+    !command ||
+    ["login", "link", "run", ...Object.keys(secretCommands)].includes(command)
+  );
 };
 
 const linkDirectory = async (
@@ -103,14 +127,14 @@ const linkDirectory = async (
 
 const linkedCommand = async (
   args: CliArgs,
-  command: "login" | "run",
+  command: "login" | "run" | SecretCommand,
   childCommand: string[],
   credentials: CredentialStore
 ): Promise<number> => {
   const link = await findLink(process.cwd());
   const project = args.values.project ?? link?.project;
   const environment = args.values.env ?? link?.env;
-  if (command === "run" && (!project || !environment)) {
+  if (command !== "login" && (!project || !environment)) {
     throw new UsageError(
       "No project and environment. Run jv link <project> --env <env>, or pass --project and --env."
     );
@@ -135,6 +159,20 @@ const linkedCommand = async (
       credentials,
     });
   }
+  if (isSecretCommand(command) && project && environment) {
+    if (command === "ls") {
+      return await ls({ url, project, environment, credentials });
+    }
+    const [, key = "", value] = args.positionals;
+    return await secretCommands[command]({
+      url,
+      project,
+      environment,
+      credentials,
+      key,
+      value,
+    });
+  }
   return await login({
     url,
     project,
@@ -143,6 +181,26 @@ const linkedCommand = async (
     env: process.env,
     credentials,
   });
+};
+
+const validateSecretArgs = (
+  args: CliArgs,
+  command: SecretCommand,
+  separator: number
+) => {
+  const count = args.positionals.length;
+  let validCount = count === 2;
+  if (command === "ls") {
+    validCount = count === 1;
+  } else if (command === "set") {
+    validCount = count === 2 || count === 3;
+  }
+  if (args.values.help && count === 1) {
+    validCount = true;
+  }
+  if (!validCount || separator !== -1 || args.values["no-browser"]) {
+    throw new UsageError(usage);
+  }
 };
 
 const logoutCommand = async (
@@ -187,6 +245,9 @@ const main = async (): Promise<number> => {
     const separator = argv.indexOf("--");
     const args = parseCli(argv, separator);
     const [command] = args.positionals;
+    if (isSecretCommand(command)) {
+      validateSecretArgs(args, command, separator);
+    }
     if (showHelp(args, separator)) {
       console.info(usage);
       return 0;
@@ -202,6 +263,9 @@ const main = async (): Promise<number> => {
     }
     if (command === "link") {
       return await linkDirectory(args, separator);
+    }
+    if (isSecretCommand(command)) {
+      return await linkedCommand(args, command, [], credentials);
     }
     if (
       (command !== "login" && command !== "run") ||
