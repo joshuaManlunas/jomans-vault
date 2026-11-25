@@ -30,3 +30,22 @@ export const buildScope = (
       .map(([project, environments]) => [project, [...environments]])
   ),
 });
+
+export const permissions = [
+  "read",
+  "reveal",
+  "inject",
+  "write",
+  "delete",
+] as const;
+
+export const suggestedSelection = (
+  suggestion: { project: string | null; env: string | null },
+  owned: Record<string, readonly string[]>
+): Record<string, string[]> => {
+  const { project, env } = suggestion;
+  if (project !== null && env !== null && owned[project]?.includes(env)) {
+    return { [project]: [env] };
+  }
+  return {};
+};

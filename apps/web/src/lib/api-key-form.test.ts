@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 
-import { apiKeyStatus, buildScope, expiryPresets } from "./api-key-form";
+import {
+  apiKeyStatus,
+  buildScope,
+  expiryPresets,
+  suggestedSelection,
+} from "./api-key-form";
 
 test("expiry presets use seconds within the API range", () => {
   const expected = [
@@ -57,5 +62,26 @@ test("status gives revocation precedence and expires at the boundary", () => {
   ] as const;
   for (const { revoked, expiresAt, status } of cases) {
     expect(apiKeyStatus({ revoked, expiresAt }, now)).toBe(status);
+  }
+});
+
+test("suggested selection only ticks an owned environment", () => {
+  const cases: {
+    suggestion: { project: string | null; env: string | null };
+    expected: Record<string, string[]>;
+  }[] = [
+    {
+      suggestion: { project: "app", env: "development" },
+      expected: { app: ["development"] },
+    },
+    { suggestion: { project: "app", env: "production" }, expected: {} },
+    { suggestion: { project: "other", env: "development" }, expected: {} },
+    { suggestion: { project: "app", env: null }, expected: {} },
+    { suggestion: { project: null, env: null }, expected: {} },
+  ];
+  for (const { suggestion, expected } of cases) {
+    expect(suggestedSelection(suggestion, { app: ["development"] })).toEqual(
+      expected
+    );
   }
 });
