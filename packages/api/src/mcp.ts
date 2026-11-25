@@ -5,7 +5,11 @@ import {
   createMcpHandler,
   isLegacyRequest,
 } from "@modelcontextprotocol/server";
-import type { CallToolResult } from "@modelcontextprotocol/server";
+import type {
+  CallToolResult,
+  McpHttpHandler,
+  McpServerFactory,
+} from "@modelcontextprotocol/server";
 import { ORPCError, call } from "@orpc/server";
 import * as z from "zod";
 
@@ -113,16 +117,16 @@ const httpError = (status: number, code: number, message: string): Response =>
 
 const serveMcp = async (
   request: Request,
-  context: Context
+  factory: McpServerFactory,
+  modern: McpHttpHandler
 ): Promise<Response> => {
-  const factory = () => createServer(context);
   if (await isLegacyRequest(request)) {
     if (request.method !== "POST") {
       const response = httpError(405, -32_000, "Method not allowed.");
       response.headers.set("Allow", "POST");
       return response;
     }
-    const server = factory();
+    const server = await factory({ era: "legacy", requestInfo: request });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -134,17 +138,7 @@ const serveMcp = async (
       await server.close();
     }
   }
-  const modern = createMcpHandler(factory, {
-    responseMode: "json",
-    legacy: "reject",
-    // Listen streams ignore responseMode; refuse them before the SSE ack.
-    maxSubscriptions: 0,
-  });
-  try {
-    return await modern.fetch(request);
-  } finally {
-    await modern.close();
-  }
+  return await modern.fetch(request);
 };
 
 export const createVaultMcpHandler = ({
@@ -153,6 +147,20 @@ export const createVaultMcpHandler = ({
   masterKey,
 }: VaultApiHandlerOptions): VaultApiHandler => {
   const parsedMasterKey = parseMasterKey(masterKey);
+  const contexts = new WeakMap<Request, Context>();
+  const factory: McpServerFactory = ({ requestInfo }) => {
+    const context = requestInfo && contexts.get(requestInfo);
+    if (!context) {
+      throw new Error("Missing MCP request context");
+    }
+    return createServer(context);
+  };
+  const modern = createMcpHandler(factory, {
+    responseMode: "json",
+    legacy: "reject",
+    // Listen streams ignore responseMode; refuse them before the SSE ack.
+    maxSubscriptions: 0,
+  });
   return async (request) => {
     let response: Response;
     if (request.headers.has("Origin")) {
@@ -164,10 +172,16 @@ export const createVaultMcpHandler = ({
         headers: request.headers,
         masterKey: parsedMasterKey,
       });
-      response =
-        context.principal?.type === "apiKey"
-          ? await serveMcp(request, context)
-          : httpError(401, -32_001, "Unauthorized");
+      if (context.principal?.type === "apiKey") {
+        contexts.set(request, context);
+        try {
+          response = await serveMcp(request, factory, modern);
+        } finally {
+          contexts.delete(request);
+        }
+      } else {
+        response = httpError(401, -32_001, "Unauthorized");
+      }
     }
     response.headers.set("Cache-Control", "private, no-store");
     return response;

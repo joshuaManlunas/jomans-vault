@@ -12,7 +12,7 @@ Connect an MCP client over Streamable HTTP to `<vault origin>/api/mcp`. Pass a s
 | `list_keys` | `project`, `environment` | `read` | Key names, kinds, versions and update times, sorted by key |
 | `set_secret` | `project`, `environment`, `key`, `value` | `write` | Key name and new version |
 
-Both tools enforce the key's project and environment scope. `set_secret` creates a key or adds a new version and records a `secret.write` audit event. There is deliberately no tool to read a value or run a command.
+Both tools enforce the key's project and environment scope. `set_secret` creates a key or adds a new version and records a `secret.write` audit event. The HTTP endpoint has no tool to read a value or run a command.
 
 For a client supporting HTTP MCP server configuration, replace the URL and key:
 

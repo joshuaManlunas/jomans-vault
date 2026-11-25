@@ -58,6 +58,11 @@ const metadata = {
   "User-Agent": "Vault MCP test",
   "X-Forwarded-For": "192.0.2.10, 192.0.2.11",
 };
+const modernMeta = {
+  [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
+  [CLIENT_INFO_META_KEY]: { name: "json-test", version: "1.0.0" },
+  [CLIENT_CAPABILITIES_META_KEY]: {},
+};
 type CreatedKey = Awaited<ReturnType<typeof auth.api.createApiKey>>;
 interface TestUser {
   cookie: string;
@@ -614,68 +619,169 @@ test("legacy clients list and set through the same tools with JSON-only response
 
 test("modern requests return JSON and both eras reject subscription streams", async () => {
   const before = await snapshot();
-  const modernMeta = {
-    [PROTOCOL_VERSION_META_KEY]: "2026-07-28",
-    [CLIENT_INFO_META_KEY]: { name: "json-test", version: "1.0.0" },
-    [CLIENT_CAPABILITIES_META_KEY]: {},
-  };
-  await Promise.all(
-    [false, true].map(async (modern) => {
-      const headers = {
-        Authorization: `Bearer ${keys.all.key}`,
-        Accept: "application/json, text/event-stream",
-        "MCP-Protocol-Version": modern ? "2026-07-28" : "2025-11-25",
-      };
-      await Promise.all(
-        ["tools/list", "subscriptions/listen"].map(async (method) => {
-          const response = await handler(
-            rawRequest(
-              { ...headers, ...(modern ? { "Mcp-Method": method } : {}) },
-              "POST",
-              JSON.stringify({
+  const warning = spyOn(console, "warn");
+  try {
+    await Promise.all(
+      [false, true].map(async (modern) => {
+        const headers = {
+          Authorization: `Bearer ${keys.all.key}`,
+          Accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": modern ? "2026-07-28" : "2025-11-25",
+        };
+        await Promise.all(
+          ["tools/list", "subscriptions/listen"].map(async (method) => {
+            const response = await handler(
+              rawRequest(
+                { ...headers, ...(modern ? { "Mcp-Method": method } : {}) },
+                "POST",
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: method,
+                  method,
+                  params: {
+                    ...(modern ? { _meta: modernMeta } : {}),
+                    ...(method === "subscriptions/listen"
+                      ? { notifications: { toolsListChanged: true } }
+                      : {}),
+                  },
+                })
+              )
+            );
+            const body = await response.json();
+            expect({ status: response.status, body }).toMatchObject({
+              status: 200,
+            });
+            expect(response.headers.get("Content-Type")).toContain(
+              "application/json"
+            );
+            expect(response.headers.has("Mcp-Session-Id")).toBe(false);
+            expect(response.headers.get("Cache-Control")).toBe(
+              "private, no-store"
+            );
+            if (method === "subscriptions/listen") {
+              expect(body).toMatchObject({
                 jsonrpc: "2.0",
                 id: method,
-                method,
-                params: {
-                  ...(modern ? { _meta: modernMeta } : {}),
-                  ...(method === "subscriptions/listen"
-                    ? { notifications: { toolsListChanged: true } }
-                    : {}),
+                error: { code: modern ? -32_603 : -32_601 },
+              });
+            } else {
+              expect(body).toMatchObject({
+                id: method,
+                result: {
+                  tools: [{ name: "list_keys" }, { name: "set_secret" }],
                 },
-              })
-            )
-          );
-          const body = await response.json();
-          expect({ status: response.status, body }).toMatchObject({
-            status: 200,
-          });
-          expect(response.headers.get("Content-Type")).toContain(
-            "application/json"
-          );
-          expect(response.headers.has("Mcp-Session-Id")).toBe(false);
-          expect(response.headers.get("Cache-Control")).toBe(
-            "private, no-store"
-          );
-          if (method === "subscriptions/listen") {
-            expect(body).toMatchObject({
+              });
+            }
+            expectNoValues(body);
+          })
+        );
+      })
+    );
+    expect(await snapshot()).toEqual(before);
+    expect(warning).not.toHaveBeenCalled();
+  } finally {
+    warning.mockRestore();
+  }
+});
+
+test("concurrent modern calls keep request permissions and audit context isolated", async () => {
+  const before = await db.select().from(auditEvent);
+  const cases = [
+    { key: keys.write, name: "MODERN_WRITE", ip: "192.0.2.20" },
+    { key: keys.all, name: "MODERN_ALL", ip: "192.0.2.21" },
+    {
+      key: keys.read,
+      name: "MODERN_READ",
+      ip: "192.0.2.22",
+      error: "Forbidden",
+    },
+    {
+      key: keys.other,
+      name: "MODERN_OTHER",
+      ip: "192.0.2.23",
+      error: "Not found",
+    },
+  ];
+  const warning = spyOn(console, "warn");
+  try {
+    await Promise.all(
+      cases.map(async (entry) => {
+        const response = await handler(
+          rawRequest(
+            {
+              Authorization: `Bearer ${entry.key.key}`,
+              Accept: "application/json, text/event-stream",
+              "MCP-Protocol-Version": "2026-07-28",
+              "Mcp-Method": "tools/call",
+              "Mcp-Name": "set_secret",
+              "User-Agent": entry.name,
+              "X-Forwarded-For": entry.ip,
+            },
+            "POST",
+            JSON.stringify({
               jsonrpc: "2.0",
-              id: method,
-              error: { code: modern ? -32_603 : -32_601 },
-            });
-          } else {
-            expect(body).toMatchObject({
-              id: method,
-              result: {
-                tools: [{ name: "list_keys" }, { name: "set_secret" }],
+              id: entry.name,
+              method: "tools/call",
+              params: {
+                _meta: modernMeta,
+                name: "set_secret",
+                arguments: { ...target, key: entry.name, value: secretValue },
               },
-            });
-          }
-          expectNoValues(body);
-        })
-      );
-    })
+            })
+          )
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("Content-Type")).toContain(
+          "application/json"
+        );
+        expect(response.headers.has("Mcp-Session-Id")).toBe(false);
+        expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+        const result = entry.error
+          ? { isError: true, content: [{ type: "text", text: entry.error }] }
+          : {
+              structuredContent: { key: entry.name, version: 1 },
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({ key: entry.name, version: 1 }),
+                },
+              ],
+            };
+        const body = await response.json();
+        expect(body).toMatchObject({ id: entry.name, result });
+        expectNoValues(body);
+      })
+    );
+    expect(warning).not.toHaveBeenCalled();
+  } finally {
+    warning.mockRestore();
+  }
+  const after = await db.select().from(auditEvent);
+  const rows = after.filter(
+    (row) => !before.some((prior) => prior.id === row.id)
   );
-  expect(await snapshot()).toEqual(before);
+  expect(rows).toHaveLength(2);
+  const secrets = await db.select().from(secret);
+  for (const entry of cases) {
+    const stored = secrets.filter((row) => row.key === entry.name);
+    if (entry.error) {
+      expect(stored).toHaveLength(0);
+    } else {
+      expect(stored).toHaveLength(1);
+      const events = rows.filter((row) => row.secretId === stored[0]?.id);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        action: "secret.write",
+        actorType: "apiKey",
+        actorId: entry.key.id,
+        ip: entry.ip,
+        userAgent: entry.name,
+        environmentId: stored[0]?.environmentId,
+      });
+      expect(events[0]?.projectId).toBeString();
+    }
+  }
+  expectNoValues(rows);
 });
 
 test("MCP docs describe tools, permissions, boundaries and copyable client config", async () => {
