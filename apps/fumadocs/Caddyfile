@@ -1,0 +1,12 @@
+{
+	admin off
+}
+
+http://:8080 {
+	root * /srv
+	encode zstd gzip
+	redir / /docs
+	header /api/search Content-Type application/json
+	try_files {path} {path}/index.html /_shell.html
+	file_server
+}

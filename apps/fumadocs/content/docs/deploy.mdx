@@ -12,6 +12,15 @@ This guide covers deploying the full Joman's Vault stack on a single Linux VPS (
 | Documentation site (Fumadocs) | `apps/fumadocs` | Pre-rendered static files served by Caddy | `https://docs.example.com` |
 | `jv` CLI & Varlock plugin | `apps/cli` | Compiled native binary installed on developer / agent machines | Connects to `https://vault.example.com` |
 
+## Deploying on Dokploy
+
+Create two Dokploy Compose services from this repository with Compose type **Docker Compose**.
+
+- Use `./docker-compose.dokploy.yml` for the vault web app, PostgreSQL, and migrations. Route your vault domain to service `web` on port `3001`.
+- Use `./docker-compose.docs.yml` for the static documentation. Route your docs domain (e.g. `docs.example.com`) to service `docs` on port `8080`.
+
+Dokploy writes each service's **Environment** values to `.env` beside its Compose file. Set the vault's production variables on the web stack. The docs stack needs no environment variables.
+
 ## 1. Prerequisites and VPS hardening
 
 ### Hardware and software

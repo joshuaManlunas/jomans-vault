@@ -1,0 +1,9 @@
+# Dokploy's Traefik routes the configured domain to docs:8080.
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: apps/fumadocs/Dockerfile
+    expose:
+      - "8080"
+    restart: unless-stopped
