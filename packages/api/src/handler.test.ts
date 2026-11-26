@@ -3039,6 +3039,151 @@ const exportRequest = async (
   );
 const exportFormats = ["json", "dotenv"] as const;
 
+const seedExportSecrets = async (
+  projectSlug: string,
+  count: number,
+  value: string
+) => {
+  const { environments } = await createSecretScope(projectSlug);
+  const environmentId = firstRow(environments).id;
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "K0000", { value }),
+    "K0000",
+    1
+  );
+  const source = firstRow(await secretRows(environmentId, "K0000"));
+  await db.execute(sql`
+    INSERT INTO secret (id, environment_id, key, kind)
+    SELECT ${environmentId} || '-' || n, ${environmentId},
+      'K' || lpad(n::text, 4, '0'), 'secret'
+    FROM generate_series(1, ${count - 1}::int) AS n
+  `);
+  await db.execute(sql`
+    INSERT INTO secret_version
+      (id, secret_id, version, ciphertext, iv, created_by_type, created_by_id)
+    SELECT s.id || '-version', s.id, 1, v.ciphertext, v.iv, 'user', ${userA.id}
+    FROM secret s CROSS JOIN secret_version v
+    WHERE s.environment_id = ${environmentId} AND s.key <> 'K0000'
+      AND v.id = ${source.currentVersionId}
+  `);
+  await db.execute(sql`
+    UPDATE secret SET current_version_id = id || '-version'
+    WHERE environment_id = ${environmentId} AND key <> 'K0000'
+  `);
+  return environmentId;
+};
+
+const expectExportRefused = async (
+  projectSlug: string,
+  message: string,
+  privateValue: string
+) => {
+  const before = await secretState();
+  await Promise.all(
+    exportFormats.map(async (format) => {
+      const response = await exportRequest(
+        projectSlug,
+        "dev",
+        `?format=${format}`
+      );
+      expect(response.status).toBe(422);
+      expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+      const text = await response.text();
+      expect(JSON.parse(text)).toEqual({
+        defined: false,
+        code: "UNPROCESSABLE_CONTENT",
+        status: 422,
+        message,
+      });
+      expect(text).not.toContain("K0000");
+      expect(text).not.toContain(privateValue);
+    })
+  );
+  expect(await secretState()).toEqual(before);
+};
+
+test("export count boundary and deleted secrets apply to both formats", async () => {
+  const projectSlug = "export-count-limit";
+  const value = "PRIVATE_EXPORT_LIMIT";
+  const environmentId = await seedExportSecrets(projectSlug, 1001, value);
+  await expectExportRefused(
+    projectSlug,
+    "Environment exceeds the export limit of 1000 secrets",
+    value
+  );
+  await db.execute(sql`
+    UPDATE secret SET deleted_at = now()
+    WHERE environment_id = ${environmentId} AND key = 'K1000'
+  `);
+  const keys = Array.from(
+    { length: 1000 },
+    (_, index) => `K${index.toString().padStart(4, "0")}`
+  );
+  await Promise.all(
+    exportFormats.map(async (format) => {
+      const response = await exportRequest(
+        projectSlug,
+        "dev",
+        `?format=${format}`
+      );
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const values = format === "json" ? JSON.parse(text) : parse(text);
+      expect(Object.keys(values)).toEqual(keys);
+      expect(Object.values(values)).toEqual(keys.map(() => value));
+    })
+  );
+}, 30_000);
+
+test("export stored-byte boundary counts only current live values in both formats", async () => {
+  const projectSlug = "export-byte-limit";
+  const value = "x".repeat(65_520);
+  await seedExportSecrets(projectSlug, 64, value);
+  // A deleted maximum-sized value must not tip the boundary over the limit.
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "DELETED", {
+      value: "y".repeat(65_536),
+    }),
+    "DELETED",
+    1
+  );
+  const deletion = await secretRequest("DELETE", projectSlug, "dev", "DELETED");
+  expect(deletion.status).toBe(204);
+  await Promise.all(
+    exportFormats.map(async (format) => {
+      const response = await exportRequest(
+        projectSlug,
+        "dev",
+        `?format=${format}`
+      );
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const values = format === "json" ? JSON.parse(text) : parse(text);
+      expect(Object.keys(values)).toEqual(
+        Array.from(
+          { length: 64 },
+          (_, index) => `K${index.toString().padStart(4, "0")}`
+        )
+      );
+      expect(Object.values(values)).toEqual(
+        Array.from({ length: 64 }, () => value)
+      );
+    })
+  );
+  await expectSet(
+    await secretRequest("PUT", projectSlug, "dev", "K0000", {
+      value: `${value}x`,
+    }),
+    "K0000",
+    2
+  );
+  await expectExportRefused(
+    projectSlug,
+    "Environment exceeds the export limit of 4194304 bytes (4 MiB) of stored values",
+    value
+  );
+}, 30_000);
+
 test("JSON exports only live current values of every kind in list order", async () => {
   await createSecretScope("export-current", ["dev", "prod"]);
   await Promise.all(
@@ -3429,3 +3574,12 @@ test.each(
     expect(await secretState()).toEqual(before);
   }
 );
+
+test("generated export operation describes stored-value limits", async () => {
+  const spec = await generateOpenApiSpec();
+  expect(
+    spec.paths?.["/projects/{project}/envs/{env}/export"]?.get?.description
+  ).toBe(
+    "Returns every live secret's current value. Refused with 422 when the environment has more than 1000 secrets or more than 4 MiB (4,194,304 bytes) of stored values; each value is stored as its UTF-8 size plus 16 bytes."
+  );
+});

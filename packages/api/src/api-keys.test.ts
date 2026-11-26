@@ -51,6 +51,9 @@ const masterKey = btoa(
 const handler = createVaultApiHandler({ db, auth, masterKey });
 const keyBytes = parseMasterKey(masterKey);
 const scope = { projects: { "my-app": ["development", "missing"] } };
+let storedScope: typeof scope & {
+  grants: Record<string, Record<string, string>>;
+};
 const secretValue = "private-api-key-test-value";
 const envPath = "/projects/my-app/envs/development";
 const listPath = `${envPath}/secrets`;
@@ -119,7 +122,7 @@ const keyRequest = async (
 ) => await request(method, path, { Authorization: `Bearer ${key}` }, body);
 const createKey = async (
   permissions?: string[],
-  metadata: unknown = scope,
+  metadata: unknown = storedScope,
   userId = userA.id
 ) =>
   await auth.api.createApiKey({
@@ -165,12 +168,54 @@ beforeAll(async () => {
   );
   const write = await request("PUT", valuePath, cookie, { value: secretValue });
   expect(write.status).toBe(200);
+  const missing = await request(
+    "POST",
+    "/projects/my-app/envs",
+    { cookie: userA.cookie },
+    { slug: "missing" }
+  );
+  expect(missing.status).toBe(201);
+  const granted = await db
+    .select({
+      projectId: project.id,
+      slug: environment.slug,
+      id: environment.id,
+    })
+    .from(project)
+    .innerJoin(environment, eq(environment.projectId, project.id))
+    .where(eq(project.ownerId, userA.id));
+  const myProject = await db
+    .select()
+    .from(project)
+    .where(eq(project.slug, "my-app"));
+  const myProjectId = myProject[0]?.id;
+  if (!myProjectId) {
+    throw new Error("Seeded project not found");
+  }
+  storedScope = {
+    ...scope,
+    grants: {
+      [myProjectId]: Object.fromEntries(
+        granted
+          .filter(
+            (row) =>
+              row.projectId === myProjectId &&
+              scope.projects["my-app"].includes(row.slug)
+          )
+          .map((row) => [row.slug, row.id])
+      ),
+    },
+  };
+  const removed = await request("DELETE", "/projects/my-app/envs/missing", {
+    cookie: userA.cookie,
+  });
+  expect(removed.status).toBe(204);
   keys = {
     read: await createKey(["read"]),
     reveal: await createKey(["reveal"]),
     inject: await createKey(["inject"]),
     all: await createKey(["read", "reveal", "inject", "write", "delete"]),
-    other: await createKey(["read", "reveal", "inject"], scope, userB.id),
+    other: await createKey(["read", "reveal", "inject"], storedScope, userB.id),
   };
 }, 30_000);
 
@@ -557,6 +602,9 @@ test.each([
   {},
   { projects: { "my-app": "development" } },
   { projects: ["my-app"] },
+  scope,
+  { grants: { invalid: ["development"] } },
+  { grants: { invalid: { development: 123 } } },
   "unreadable",
 ])(
   "missing or malformed scope %j grants no project access",
@@ -587,7 +635,7 @@ test("unknown permissions are discarded and do not grant reveal or inject", asyn
     type: "apiKey",
     keyId: key.id,
     userId: userA.id,
-    scope,
+    scope: { grants: storedScope.grants },
     permissions: ["read", "write", "delete"],
   });
   const response = await keyRequest(key.key);
@@ -793,7 +841,7 @@ test.each(
   }) => {
     const key = await createKey(
       [permission],
-      scope,
+      storedScope,
       user === "owner" ? userA.id : userB.id
     );
     const before = await snapshotVault();
@@ -1087,4 +1135,156 @@ test("signed-in owner cannot write a reserved name", async () => {
       "NODE_OPTIONS is reserved because it controls how programs start. Use a different name.",
   });
   expect(await snapshotVault()).toEqual(before);
+});
+
+test("legacy scopes remain visible and revocable but grant no access", async () => {
+  const legacyScope = { projects: { "my-app": ["development"] } };
+  const key = await createKey(["read"], legacyScope);
+  await expectError(await keyRequest(key.key), 403, "FORBIDDEN");
+  const listed = await request("GET", "/api-keys", { cookie: userA.cookie });
+  expect(listed.status).toBe(200);
+  expect(await listed.json()).toContainEqual(
+    expect.objectContaining({ id: key.id, scope: legacyScope })
+  );
+  const revoked = await request("POST", `/api-keys/${key.id}/revoke`, {
+    cookie: userA.cookie,
+  });
+  expect(revoked.status).toBe(200);
+  expect(await revoked.json()).toMatchObject({
+    scope: legacyScope,
+    revoked: true,
+  });
+});
+
+test("an inherited environment property is outside the grant", async () => {
+  const before = await snapshotVault();
+  await expectError(
+    await keyRequest(
+      keys.read.key,
+      "/projects/my-app/envs/constructor/secrets"
+    ),
+    403,
+    "FORBIDDEN"
+  );
+  expect(await snapshotVault()).toEqual(before);
+});
+
+const recreationRoutes = [
+  { permission: "read", method: "GET", suffix: "/secrets", status: 200 },
+  { permission: "inject", method: "GET", suffix: "/export", status: 200 },
+  {
+    permission: "reveal",
+    method: "GET",
+    suffix: "/secrets/TOKEN",
+    status: 200,
+  },
+  {
+    permission: "write",
+    method: "PUT",
+    suffix: "/secrets/TOKEN",
+    body: { value: "replacement" },
+    status: 200,
+  },
+  {
+    permission: "delete",
+    method: "DELETE",
+    suffix: "/secrets/TOKEN",
+    status: 204,
+  },
+] as const;
+
+test.each(
+  (["project", "environment"] as const).flatMap((recreate) =>
+    recreationRoutes.map((route) => ({ recreate, ...route }))
+  )
+)("$permission key cannot access a recreated $recreate", async (route) => {
+  const slug = `recreate-${crypto.randomUUID()}`;
+  const projectPath = `/projects/${slug}`;
+  const environmentPath = `${projectPath}/envs/development`;
+  const cookie = { cookie: userA.cookie };
+  const createProject = async () => {
+    const response = await request("POST", "/projects", cookie, {
+      slug,
+      name: slug,
+    });
+    expect(response.status).toBe(201);
+  };
+  const createEnvironment = async () => {
+    const response = await request("POST", `${projectPath}/envs`, cookie, {
+      slug: "development",
+    });
+    expect(response.status).toBe(201);
+  };
+  const issuedScope = { projects: { [slug]: ["development"] } };
+  const issue = async () => {
+    const response = await request("POST", "/api-keys", cookie, {
+      name: "Recreation regression",
+      scope: issuedScope,
+      permissions: [route.permission],
+    });
+    expect(response.status).toBe(201);
+    const raw: unknown = await response.json();
+    expect(raw).not.toHaveProperty("grants");
+    const output = z
+      .object({ id: z.string(), key: z.string(), scope: z.unknown() })
+      .parse(raw);
+    expect(output.scope).toEqual(issuedScope);
+    return output;
+  };
+  await createProject();
+  await createEnvironment();
+  const original = await issue();
+  const [ownedProject] = await db
+    .select()
+    .from(project)
+    .where(eq(project.slug, slug));
+  if (!ownedProject) {
+    throw new Error("Created project not found");
+  }
+  const [ownedEnvironment] = await db
+    .select()
+    .from(environment)
+    .where(eq(environment.projectId, ownedProject.id));
+  const [row] = await db
+    .select()
+    .from(apikey)
+    .where(eq(apikey.id, original.id));
+  if (!(row?.metadata && ownedEnvironment)) {
+    throw new Error("Issued metadata or environment not found");
+  }
+  expect(JSON.parse(row.metadata)).toEqual({
+    ...issuedScope,
+    grants: { [ownedProject.id]: { development: ownedEnvironment.id } },
+  });
+  const removed = await request(
+    "DELETE",
+    route.recreate === "project" ? projectPath : environmentPath,
+    cookie
+  );
+  expect(removed.status).toBe(204);
+  if (route.recreate === "project") {
+    await createProject();
+  }
+  await createEnvironment();
+  const seeded = await request(
+    "PUT",
+    `${environmentPath}/secrets/TOKEN`,
+    cookie,
+    {
+      value: "recreated-value",
+    }
+  );
+  expect(seeded.status).toBe(200);
+  const before = await snapshotVault();
+  const target = `${environmentPath}${route.suffix}`;
+  const body = "body" in route ? route.body : undefined;
+  await expectError(
+    await keyRequest(original.key, target, route.method, body),
+    403,
+    "FORBIDDEN"
+  );
+  expect(await snapshotVault()).toEqual(before);
+  const replacement = await issue();
+  const allowed = await keyRequest(replacement.key, target, route.method, body);
+  expect(allowed.status).toBe(route.status);
 });

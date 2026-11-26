@@ -13,6 +13,7 @@ import { ORPCError } from "@orpc/server";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import * as z from "zod";
 
+import { mapWithConcurrency } from "../concurrency";
 import type { Context } from "../context";
 import { principalActor } from "../context";
 import { DotenvValueError, formatDotenv } from "../dotenv";
@@ -21,6 +22,24 @@ import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
 import { isReservedEnvName, reservedEnvNameMessage } from "../reserved-env";
 import { isUniqueViolation, secretKey, slug } from "./validation";
+
+const EXPORT_MAX_SECRETS = 1000;
+const EXPORT_MAX_VALUE_BYTES = 4_194_304;
+const EXPORT_DECRYPT_CONCURRENCY = 8;
+
+const checkExportSize = (count: number, bytes: number): void => {
+  if (count > EXPORT_MAX_SECRETS) {
+    throw new ORPCError("UNPROCESSABLE_CONTENT", {
+      message: "Environment exceeds the export limit of 1000 secrets",
+    });
+  }
+  if (bytes > EXPORT_MAX_VALUE_BYTES) {
+    throw new ORPCError("UNPROCESSABLE_CONTENT", {
+      message:
+        "Environment exceeds the export limit of 4194304 bytes (4 MiB) of stored values",
+    });
+  }
+};
 
 const encoder = new TextEncoder();
 const pathInput = z.object({ project: slug, env: slug, key: secretKey });
@@ -120,6 +139,8 @@ export const secretsRouter = {
     .route({
       method: "GET",
       path: "/projects/{project}/envs/{env}/export",
+      description:
+        "Returns every live secret's current value. Refused with 422 when the environment has more than 1000 secrets or more than 4 MiB (4,194,304 bytes) of stored values; each value is stored as its UTF-8 size plus 16 bytes.",
     })
     .input(
       z.object({
@@ -154,6 +175,25 @@ export const secretsRouter = {
       if (!context.environment) {
         throw new ORPCError("NOT_FOUND");
       }
+      const liveSecrets = and(
+        eq(secret.environmentId, context.environment.id),
+        isNull(secret.deletedAt)
+      );
+      const [size] = await context.db
+        .select({
+          count: sql`count(*)`.mapWith(Number),
+          bytes:
+            sql`coalesce(sum(octet_length(${secretVersion.ciphertext})), 0)`.mapWith(
+              Number
+            ),
+        })
+        .from(secret)
+        .innerJoin(secretVersion, eq(secret.currentVersionId, secretVersion.id))
+        .where(liveSecrets);
+      if (!size) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR");
+      }
+      checkExportSize(size.count, size.bytes);
       const rows = await context.db
         .select({
           key: secret.key,
@@ -162,22 +202,24 @@ export const secretsRouter = {
         })
         .from(secret)
         .innerJoin(secretVersion, eq(secret.currentVersionId, secretVersion.id))
-        .where(
-          and(
-            eq(secret.environmentId, context.environment.id),
-            isNull(secret.deletedAt)
-          )
-        )
-        .orderBy(asc(secret.key));
+        .where(liveSecrets)
+        .orderBy(asc(secret.key))
+        .limit(EXPORT_MAX_SECRETS + 1);
+      checkExportSize(
+        rows.length,
+        rows.reduce((bytes, row) => bytes + row.ciphertext.byteLength, 0)
+      );
       const dek = await projectDek(context, context.project.id);
       const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
       let entries;
       try {
-        entries = await Promise.all(
-          rows.map(async (row) => ({
+        entries = await mapWithConcurrency(
+          rows,
+          EXPORT_DECRYPT_CONCURRENCY,
+          async (row) => ({
             key: row.key,
             value: decoder.decode(await decryptValue(row, dek)),
-          }))
+          })
         );
       } catch (error) {
         return rethrowIntegrityError(error);

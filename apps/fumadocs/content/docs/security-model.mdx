@@ -13,7 +13,9 @@ Each secret version's value is encrypted at rest with AES-256-GCM under its proj
 
 ## Key scopes
 
-An API key acts for the user who created it. Its scope names projects and the environments allowed in each project. It can only reach its owner's projects and environments explicitly selected when the key was created; environments created later are not automatically included.
+An API key acts for the user who created it. Its scope names projects and the environments allowed in each project. It can only reach its owner's projects and environments explicitly selected when the key was created; environments created later are not automatically included. A key is bound to the specific projects and environments that existed when it was created. Deleting one and recreating it under the same name does not restore access: the old key receives `403`.
+
+Keys created before this ID binding was introduced grant no access and must be reissued through `jv login` or `/settings/api-keys`.
 
 A project not owned by the key's owner returns `404`. A project or environment outside the key's scope returns `403`, as does a missing permission. Scope is checked before the environment lookup; a missing environment within that scope returns `404`. A missing secret within an allowed scope also returns `404`.
 
@@ -56,6 +58,12 @@ Each event records the action, actor type (user or API key) and actor ID, the pr
 The action depends on its audit event being written. Data changes and their events are committed together; API key creation compensates by deleting the new key if its event cannot be recorded. List requests, version-history requests and denied requests (`401`, `403`, `404`) are not recorded.
 
 The owner reads the log at `/audit` in the web app, or through `GET /api/v1/audit` with a user session. API keys cannot read it.
+
+## Login request limits
+
+Opening a CLI login request allows 20 opens per client and 500 globally in a sliding 10-minute window. Exceeding either returns `429`. The global limit provides the storage guarantee even when clients forge addresses. The per-client limit relies on a trusted proxy setting `X-Forwarded-For` or `X-Real-IP`; see the spoofed-IP note below.
+
+Accepted opens delete up to 100 requests that expired more than one hour ago. Requests remain available during that one-hour retention period after expiry, and cleanup never deletes or revokes issued API keys.
 
 ## What the vault does not protect against
 

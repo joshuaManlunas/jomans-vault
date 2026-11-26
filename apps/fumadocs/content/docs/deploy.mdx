@@ -30,7 +30,7 @@ Dokploy writes each service's **Environment** values to `.env` beside its Compos
   - `vault.example.com`
   - `docs.example.com`
 - **Software on the VPS:**
-  - Docker Engine + **Docker Compose v2.24.4 or later** (required for `ports: !reset []` in `docker-compose.prod.yml` and `ports: !override` in the VPS override)
+  - Docker Engine + **Docker Compose v2.24.4 or later** (required for `ports: !reset []` and `ports: !override` in `docker-compose.prod.yml`)
   - Bun 1.x (for building `apps/fumadocs`, running migrations, or building `jv`)
   - Caddy (automatic Let's Encrypt TLS reverse proxy and static file server)
 
@@ -124,14 +124,12 @@ EOF
 
 ## 4. Create a VPS Compose override
 
-The base `docker-compose.yml` binds `web` to `3001:3001` on all interfaces and defaults `BETTER_AUTH_URL` and `CORS_ORIGIN` to `http://localhost:3001`. On a VPS behind Caddy, add a local override file (`docker-compose.vps.yml`, gitignored or kept alongside the repo) that binds `web` to loopback only (`!override` replaces the base port list; `!reset` would drop the loopback mapping too) and forwards your HTTPS origin from `apps/web/.env`:
+Plain `docker:up` uses the base `docker-compose.yml`, which binds `web` to `3001:3001` on all interfaces and defaults `BETTER_AUTH_URL` and `CORS_ORIGIN` to `http://localhost:3001`. The production override, `docker-compose.prod.yml`, already binds `web` to `127.0.0.1:3001` only. On a VPS behind Caddy, add a local override file (`docker-compose.vps.yml`, gitignored or kept alongside the repo) that only forwards your HTTPS origin from `apps/web/.env`:
 
 ```yaml
 # /opt/jomans-vault/docker-compose.vps.yml
 services:
   web:
-    ports: !override
-      - "127.0.0.1:3001:3001"
     environment:
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL in apps/web/.env}
       CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN in apps/web/.env}
@@ -169,7 +167,7 @@ docker compose \
 
 Set `VAULT_MASTER_KEY` in `apps/web/.env` or export it in the host environment. An exported value takes precedence. Both `bun run docker:up` and `bun run docker:up:prod` fail before starting containers if the key is unset or empty.
 
-The production override uses `ports: !reset`, which requires Docker Compose 2.24 or later. Use `bun run docker:logs` to follow logs and `bun run docker:down` to stop this stack.
+The production override, `docker-compose.prod.yml`, uses `ports: !reset` and `ports: !override`, which require Docker Compose 2.24 or later (2.24.4+ as listed above). Use `bun run docker:logs` to follow logs and `bun run docker:down` to stop this stack.
 
 ### Apply database migrations
 

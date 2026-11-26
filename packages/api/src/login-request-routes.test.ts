@@ -13,12 +13,20 @@ import { createAuth } from "@jomans-vault/auth";
 import { createDb } from "@jomans-vault/db";
 import { apikey } from "@jomans-vault/db/schema/auth";
 import { auditEvent, loginRequest } from "@jomans-vault/db/schema/vault";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Pool } from "pg";
 import * as z from "zod";
 
 import { createVaultApiHandler } from "./handler";
+import { generateOpenApiSpec } from "./openapi";
+import {
+  globalLoginRequestLimit,
+  loginRequestCleanupBatch,
+  loginRequestGraceMs,
+  loginRequestWindowMs,
+  perClientLoginRequestLimit,
+} from "./routers/login-requests";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -125,7 +133,7 @@ const open = async (
     request(
       "POST",
       "/login-requests",
-      headers,
+      { "X-Forwarded-For": crypto.randomUUID(), ...headers },
       body ?? { machineName: "  laptop  " }
     ),
     201
@@ -188,7 +196,7 @@ const collect = async (opened: Opened) => {
 const age = async (id: string) =>
   await db
     .update(loginRequest)
-    .set({ expiresAt: new Date(0) })
+    .set({ expiresAt: new Date(Date.now() - 1000) })
     .where(eq(loginRequest.id, id));
 const listKeys = async () =>
   z
@@ -747,4 +755,205 @@ test("PLAN documents routes, five minutes and one-time collection", async () => 
   expect(plan).toContain("`POST /api/v1/login-requests`");
   expect(plan).toContain("expires after 5 minutes");
   expect(plan).toContain("collected once with the polling secret");
+});
+
+const limitedBody = {
+  status: 429,
+  code: "TOO_MANY_REQUESTS",
+  message: "Too many login requests. Try again later.",
+  defined: true,
+};
+const rawOpen = (headers: Record<string, string> = {}) =>
+  request("POST", "/login-requests", headers, { machineName: "limit-test" });
+const expectLimited = async (pending: Promise<Response>) => {
+  const response = await expectStatus(pending, 429);
+  expect(await response.json()).toEqual(limitedBody);
+  expect(response.headers.has("Retry-After")).toBe(false);
+};
+const seedRequests = async (
+  amount: number,
+  clientIp: string | null,
+  stale = false
+) => {
+  const rows = Array.from({ length: amount }, () => ({
+    id: crypto.randomUUID(),
+    machineName: "seed",
+    pollingSecretHash: "seed",
+    clientIp,
+    createdAt: new Date(Date.now() - (stale ? loginRequestWindowMs + 1000 : 0)),
+    expiresAt: new Date(
+      Date.now() + (stale ? -loginRequestGraceMs - 1000 : 300_000)
+    ),
+  }));
+  await db.insert(loginRequest).values(rows);
+  return rows.map((row) => row.id);
+};
+
+test.each([null, "192.0.2.90"])(
+  "per-client limit for %j persists across handlers, rejects without writes, and resets",
+  async (clientIp) => {
+    const headers: Record<string, string> =
+      clientIp === null ? {} : { "X-Forwarded-For": clientIp };
+    await db
+      .update(loginRequest)
+      .set({ createdAt: new Date(Date.now() - loginRequestWindowMs - 1000) })
+      .where(sql`${loginRequest.clientIp} IS NOT DISTINCT FROM ${clientIp}`);
+    for (const _ of Array.from({ length: perClientLoginRequestLimit })) {
+      // oxlint-disable-next-line no-await-in-loop -- Fill one bucket through successive accepted opens.
+      await expectStatus(rawOpen(headers), 201);
+    }
+    const staleIds = await seedRequests(1, "stale-rejection", true);
+    const before = await snapshot();
+    await expectLimited(rawOpen(headers));
+    expect(await snapshot()).toEqual(before);
+    const restarted = createVaultApiHandler({
+      db,
+      auth,
+      masterKey: Buffer.alloc(32, 1).toString("base64"),
+    });
+    await expectLimited(
+      restarted(
+        new Request(`${baseURL}/api/v1/login-requests`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers },
+          body: JSON.stringify({ machineName: "restart" }),
+        })
+      )
+    );
+    expect(await snapshot()).toEqual(before);
+    await expectStatus(
+      rawOpen({ "X-Forwarded-For": crypto.randomUUID() }),
+      201
+    );
+    await db
+      .update(loginRequest)
+      .set({ createdAt: new Date(Date.now() - loginRequestWindowMs - 1000) })
+      .where(sql`${loginRequest.clientIp} IS NOT DISTINCT FROM ${clientIp}`);
+    await expectStatus(rawOpen(headers), 201);
+    await db.delete(loginRequest).where(inArray(loginRequest.id, staleIds));
+  }
+);
+
+test("global limit rejects forged new clients without writes", async () => {
+  const rows = Array.from({ length: globalLoginRequestLimit }, () => ({
+    id: crypto.randomUUID(),
+    clientIp: crypto.randomUUID(),
+    machineName: "global",
+    pollingSecretHash: "seed",
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + 300_000),
+  }));
+  await db.insert(loginRequest).values(rows);
+  try {
+    const before = await snapshot();
+    await expectLimited(rawOpen({ "X-Forwarded-For": crypto.randomUUID() }));
+    expect(await snapshot()).toEqual(before);
+  } finally {
+    await db.delete(loginRequest).where(
+      inArray(
+        loginRequest.id,
+        rows.map((row) => row.id)
+      )
+    );
+  }
+});
+
+test("concurrent opens share exactly three remaining slots", async () => {
+  const clientIp = "192.0.2.91";
+  await seedRequests(perClientLoginRequestLimit - 3, clientIp);
+  const responses = await Promise.all(
+    Array.from({ length: 10 }, () => rawOpen({ "X-Forwarded-For": clientIp }))
+  );
+  expect(responses.filter((response) => response.status === 201)).toHaveLength(
+    3
+  );
+  expect(responses.filter((response) => response.status === 429)).toHaveLength(
+    7
+  );
+  expect(
+    await db
+      .select()
+      .from(loginRequest)
+      .where(eq(loginRequest.clientIp, clientIp))
+  ).toHaveLength(perClientLoginRequestLimit);
+});
+
+test("client addresses are truncated to 64 characters", async () => {
+  const address = "a".repeat(80);
+  const opened = await open(undefined, { "X-Forwarded-For": address });
+  const row = await storedRequest(opened.id);
+  expect(row.clientIp).toBe(address.slice(0, 64));
+});
+
+test.each(["pending", "approved", "denied", "collected"] as const)(
+  "cleanup preserves grace behavior for %s and never revokes its key",
+  async (status) => {
+    const opened = await open();
+    await expectStatus(approve(opened.id), 200);
+    const collected = await collect(opened);
+    const { apiKeyId: keyId } = await storedRequest(opened.id);
+    await db
+      .update(loginRequest)
+      .set({
+        status,
+        expiresAt: new Date(Date.now() - loginRequestGraceMs + 60_000),
+      })
+      .where(eq(loginRequest.id, opened.id));
+    await open();
+    const retained = await storedRequest(opened.id);
+    expect(retained.status).toBe(status);
+    const expected = status === "denied" ? "denied" : "expired";
+    const summary = await read(opened.id);
+    expect(summary.status).toBe(status === "collected" ? "approved" : expected);
+    if (status === "collected") {
+      await expectError(poll(opened), 409, "CONFLICT");
+    } else {
+      expect(await json(poll(opened))).toEqual({ status: expected });
+    }
+    await db
+      .update(loginRequest)
+      .set({ expiresAt: new Date(Date.now() - loginRequestGraceMs - 1000) })
+      .where(eq(loginRequest.id, opened.id));
+    await open();
+    expect(
+      await db.select().from(loginRequest).where(eq(loginRequest.id, opened.id))
+    ).toHaveLength(0);
+    await expectError(poll(opened), 404, "NOT_FOUND");
+    await expectError(
+      request("GET", `/login-requests/${opened.id}`, { cookie: owner.cookie }),
+      404,
+      "NOT_FOUND"
+    );
+    expect(
+      await db
+        .select()
+        .from(apikey)
+        .where(eq(apikey.id, keyId ?? ""))
+    ).toHaveLength(1);
+    await expectStatus(
+      request("GET", listPath, { "x-api-key": collected.key }),
+      200
+    );
+  }
+);
+
+test("cleanup removes at most one batch per accepted open", async () => {
+  const ids = await seedRequests(loginRequestCleanupBatch + 1, "batch", true);
+  await open();
+  expect(
+    await db
+      .select()
+      .from(loginRequest)
+      .where(
+        and(eq(loginRequest.clientIp, "batch"), inArray(loginRequest.id, ids))
+      )
+  ).toHaveLength(1);
+  await db.delete(loginRequest).where(inArray(loginRequest.id, ids));
+});
+
+test("OpenAPI documents the login request 429 response", async () => {
+  const spec = await generateOpenApiSpec();
+  expect(
+    spec.paths?.["/login-requests"]?.post?.responses?.["429"]
+  ).toBeDefined();
 });

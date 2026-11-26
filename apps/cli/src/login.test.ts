@@ -296,7 +296,7 @@ test.each(["denied", "expired"] as const)(
         )
       : vault.db
           .update(loginRequest)
-          .set({ expiresAt: new Date(0) })
+          .set({ expiresAt: new Date(Date.now() - 1000) })
           .where(eq(loginRequest.id, id)));
     const output = await child.waitForExit();
     result(output, 1);
@@ -688,3 +688,35 @@ test("login rejects an environment without a project, and accepts both flags wit
   );
   result(await child.waitForExit(), 1);
 }, 15_000);
+
+test("rate-limited opening prints a clear message and stores nothing", async () => {
+  const box = await sandbox();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      Response.json(
+        {
+          status: 429,
+          code: "TOO_MANY_REQUESTS",
+          message: "Too many login requests. Try again later.",
+          defined: true,
+        },
+        { status: 429 }
+      ),
+  });
+  const url = `http://127.0.0.1:${server.port}`;
+  try {
+    const output = await runJv(["login", "--no-browser", "--url", url], {
+      env: box.env,
+    });
+    result(output, 1);
+    expect(output.stderr).toContain(
+      `Too many login requests to the vault at ${url}. Try again later.`
+    );
+    expect(output.stderr).not.toContain("unexpected response");
+    await noStorage(box);
+  } finally {
+    await server.stop(true);
+  }
+});
