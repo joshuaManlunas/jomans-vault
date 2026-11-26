@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 import {
   decryptValue,
   encryptValue,
@@ -22,6 +24,24 @@ export const globalLoginRequestLimit = 500;
 export const loginRequestGraceMs = 60 * 60 * 1000;
 export const loginRequestCleanupBatch = 100;
 const loginRequestLock = 904_202_601;
+const pairingAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+const pairingCodeLength = 8;
+const maxPairingAttempts = 5;
+const normalizePairingCode = (value: string) =>
+  value.toUpperCase().replaceAll(/[\s-]/gu, "");
+const generatePairingCode = () => {
+  const limit = 256 - (256 % pairingAlphabet.length);
+  let code = "";
+  while (code.length < pairingCodeLength) {
+    const bytes = crypto.getRandomValues(new Uint8Array(pairingCodeLength));
+    for (const byte of bytes) {
+      if (byte < limit && code.length < pairingCodeLength) {
+        code += pairingAlphabet[byte % pairingAlphabet.length];
+      }
+    }
+  }
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+};
 const lifetimeMs = 5 * 60 * 1000;
 const idInput = z.object({ id: z.string() });
 const summaryOutput = z.object({
@@ -119,6 +139,7 @@ export const loginRequestsRouter = {
       z.object({
         id: z.string(),
         pollingSecret: z.string(),
+        pairingCode: z.string(),
         expiresAt: z.string(),
       })
     )
@@ -126,6 +147,10 @@ export const loginRequestsRouter = {
       const pollingSecret = Buffer.from(
         crypto.getRandomValues(new Uint8Array(32))
       ).toString("base64url");
+      const pairingCode = generatePairingCode();
+      const pairingCodeHash = await hashSecret(
+        normalizePairingCode(pairingCode)
+      );
       const pollingSecretHash = await hashSecret(pollingSecret);
       const clientIp = context.ip?.slice(0, 64) ?? null;
       return await context.db.transaction(async (transaction) => {
@@ -177,6 +202,7 @@ export const loginRequestsRouter = {
             environment: input.env,
             clientIp,
             pollingSecretHash,
+            pairingCodeHash,
             createdAt,
             expiresAt: new Date(createdAt.getTime() + lifetimeMs),
           })
@@ -187,6 +213,7 @@ export const loginRequestsRouter = {
         return {
           id: row.id,
           pollingSecret,
+          pairingCode,
           expiresAt: row.expiresAt.toISOString(),
         };
       });
@@ -210,6 +237,7 @@ export const loginRequestsRouter = {
     .route({ method: "POST", path: "/login-requests/{id}/approve" })
     .input(
       idInput.extend({
+        pairingCode: z.string().trim().min(1).max(64),
         scope: scopeInput,
         permissions: permissionsInput(["read", "inject"]),
       })
@@ -218,9 +246,30 @@ export const loginRequestsRouter = {
     .handler(async ({ context, input }) => {
       let createdKeyId: string | undefined;
       try {
-        return await context.db.transaction(async (transaction) => {
+        const result = await context.db.transaction(async (transaction) => {
           const row = await lockRequest(transaction, input.id);
           requirePending(row);
+          const suppliedHash = await hashSecret(
+            normalizePairingCode(input.pairingCode)
+          );
+          const matches =
+            row.pairingCodeHash !== null &&
+            timingSafeEqual(
+              Buffer.from(suppliedHash, "hex"),
+              Buffer.from(row.pairingCodeHash, "hex")
+            );
+          if (!matches) {
+            const failedPairingAttempts = row.failedPairingAttempts + 1;
+            const denied = failedPairingAttempts >= maxPairingAttempts;
+            await transaction
+              .update(loginRequest)
+              .set({
+                failedPairingAttempts,
+                status: denied ? "denied" : "pending",
+              })
+              .where(eq(loginRequest.id, row.id));
+            return { mismatch: true as const, denied };
+          }
           const created = await issueApiKey(
             context,
             {
@@ -255,8 +304,18 @@ export const loginRequestsRouter = {
           if (!updated) {
             throw new ORPCError("INTERNAL_SERVER_ERROR");
           }
-          return summarize(updated);
+          return { mismatch: false as const, summary: summarize(updated) };
         });
+        if (result.mismatch) {
+          if (result.denied) {
+            throw new ORPCError("CONFLICT");
+          }
+          throw new ORPCError("PAIRING_CODE_MISMATCH", {
+            status: 403,
+            message: "The pairing code doesn't match.",
+          });
+        }
+        return result.summary;
       } catch (error) {
         if (createdKeyId) {
           await context.db.delete(apikey).where(eq(apikey.id, createdKeyId));

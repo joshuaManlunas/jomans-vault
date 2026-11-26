@@ -15,6 +15,7 @@ import { eq } from "drizzle-orm";
 import * as z from "zod";
 
 import {
+  approvalPairingCode,
   approvalRequestId,
   closedUrl,
   expectJvResult as result,
@@ -76,20 +77,26 @@ const expectStatus = async (pending: Promise<Response>, status: number) => {
 const begin = async (box: Sandbox, url = vault.url) => {
   const child = spawn(["login", "--no-browser", "--url", url], box.env);
   const line = await child.waitForStderr(/Open this link/u);
-  return { child, id: approvalRequestId(line) };
+  return {
+    child,
+    id: approvalRequestId(line),
+    pairingCode: approvalPairingCode(
+      await child.waitForStderr(/Enter this pairing code/u)
+    ),
+  };
 };
-const approve = async (id: string) => {
+const approve = async (id: string, pairingCode: string) => {
   await expectStatus(
     vault.api("POST", `/login-requests/${id}/approve`, {
       cookie,
-      body: { scope },
+      body: { scope, pairingCode },
     }),
     200
   );
 };
 const approved = async (box: Sandbox, url = vault.url) => {
   const pending = await begin(box, url);
-  await approve(pending.id);
+  await approve(pending.id, pending.pairingCode);
   const output = await pending.child.waitForExit();
   result(output, 0);
   return output;
@@ -150,6 +157,11 @@ test("approved login opens only the link, stores a working scoped key, and leaks
   const id = approvalRequestId(line);
   const link = `${vault.url}/cli/authorize?request=${id}`;
   expect(line).toBe(`Open this link to approve this machine: ${link}`);
+  const pairingCode = approvalPairingCode(
+    await child.waitForStderr(/Enter this pairing code/u)
+  );
+  expect(link).not.toContain(pairingCode);
+  expect(link).not.toContain(pairingCode.replaceAll("-", ""));
   const [row] = await vault.db
     .select()
     .from(loginRequest)
@@ -160,7 +172,10 @@ test("approved login opens only the link, stores a working scoped key, and leaks
     environment: null,
     status: "pending",
   });
-  await approve(id);
+  await approve(
+    id,
+    approvalPairingCode(await child.waitForStderr(/Enter this pairing code/u))
+  );
   const output = await child.waitForExit();
   result(output, 0);
   expect(output.stderr).toContain(
@@ -171,7 +186,10 @@ test("approved login opens only the link, stores a working scoped key, and leaks
   if (!key) {
     throw new Error("Expected a stored key");
   }
-  expect(await readFile(argumentsPath, "utf-8")).toBe(`1\n${link}\n`);
+  const openerArguments = await readFile(argumentsPath, "utf-8");
+  expect(openerArguments).toBe(`1\n${link}\n`);
+  expect(openerArguments).not.toContain(pairingCode);
+  expect(openerArguments).not.toContain(pairingCode.replaceAll("-", ""));
   expect(output.stderr + output.stdout).not.toContain(key);
   await expectStatus(
     vault.api("GET", "/projects/my-app/envs/development/secrets", {
@@ -258,7 +276,10 @@ test.each(["credential", "remembered URL"])(
       box.env.JV_TEST_KEYCHAIN = "unavailable";
     }
     const { child, id } = await begin(box);
-    await approve(id);
+    await approve(
+      id,
+      approvalPairingCode(await child.waitForStderr(/Enter this pairing code/u))
+    );
     const output = await child.waitForExit();
     result(output, 1);
     expect(output.stderr).toContain("EISDIR");
@@ -580,6 +601,7 @@ test("ten-second network timeout applies to opening and polling", async () => {
               {
                 id: "timeout-test",
                 pollingSecret: "secret",
+                pairingCode: "2345-6789",
                 expiresAt: new Date(Date.now() + 300_000).toISOString(),
               },
               { status: 201 }
@@ -687,6 +709,27 @@ test("login rejects an environment without a project, and accepts both flags wit
     200
   );
   result(await child.waitForExit(), 1);
+}, 15_000);
+
+test("five wrong pairing codes deny login without storing credentials", async () => {
+  const box = await sandbox();
+  const { child, id } = await begin(box);
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- Exercise sequential failures and the final lockout.
+    await expectStatus(
+      vault.api("POST", `/login-requests/${id}/approve`, {
+        cookie,
+        body: { scope, pairingCode: "wrong" },
+      }),
+      attempt === 5 ? 409 : 403
+    );
+  }
+  const output = await child.waitForExit();
+  result(output, 1);
+  expect(output.stderr).toContain(
+    "The login request was denied. Nothing was stored."
+  );
+  await noStorage(box);
 }, 15_000);
 
 test("rate-limited opening prints a clear message and stores nothing", async () => {

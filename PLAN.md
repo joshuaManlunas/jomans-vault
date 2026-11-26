@@ -113,7 +113,7 @@ apiKey({
 - Keys are shown once at creation. The plugin stores only a hash. Keys can expire and be revoked from the UI.
 - Run `bun run auth:generate` after adding the plugin, then generate and apply a migration.
 
-**CLI login:** `jv login` opens the browser to `/cli/authorize`, a new `apps/web` route under `_auth/`. There the signed-in human approves a scoped key for that machine. The login request expires after 5 minutes, and the key is collected once with the polling secret. The key goes into the OS credential store, never into a dotfile (see §4).
+**CLI login:** `jv login` opens the browser to `/cli/authorize`, a new `apps/web` route under `_auth/`. There the signed-in human enters the pairing code printed in the terminal and approves a scoped key for that machine. The pairing code is never in the link; deny requests you did not start. Five wrong codes deny the request. Only `read` is preselected; `inject` is opt-in and needed by `jv run`, `jv export` and `jv mcp` (its `run` tool). The login request expires after 5 minutes, and the key is collected once with the polling secret. The key goes into the OS credential store, never into a dotfile (see §4).
 
 ## 4. Local development without secrets on disk
 

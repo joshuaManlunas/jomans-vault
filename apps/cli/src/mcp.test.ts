@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
 import {
+  approvalPairingCode,
   approvalRequestId,
   closedUrl,
   createSandbox,
@@ -54,9 +55,12 @@ const authenticate = async (
   const child = spawnJv(["login", "--no-browser", "--url", vault.url], box);
   logins.push(child);
   const id = approvalRequestId(await child.waitForStderr(/Open this link/u));
+  const pairingCode = approvalPairingCode(
+    await child.waitForStderr(/Enter this pairing code/u)
+  );
   const response = await vault.api("POST", `/login-requests/${id}/approve`, {
     cookie,
-    body: { permissions, scope: keyScope },
+    body: { permissions, scope: keyScope, pairingCode },
   });
   expect(response.status).toBe(200);
   const loginResult = await child.exited;

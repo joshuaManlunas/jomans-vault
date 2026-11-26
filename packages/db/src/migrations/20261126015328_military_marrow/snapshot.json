@@ -1,0 +1,81 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "b553fdc9-9581-422b-886d-56c268371019",
+  "prevIds": [
+    "321a130a-bca3-41b7-a8ab-a5d36d545352"
+  ],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "login_request",
+        "pairing_code_hash"
+      ],
+      "writes": [
+        "s|col|public.login_request.pairing_code_hash",
+        "n|col|public.login_request.pairing_code_hash",
+        "e|col|public.login_request.pairing_code_hash"
+      ],
+      "reads": [
+        "n|tbl|public.login_request",
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "login_request",
+        "failed_pairing_attempts"
+      ],
+      "writes": [
+        "s|col|public.login_request.failed_pairing_attempts",
+        "n|col|public.login_request.failed_pairing_attempts",
+        "e|col|public.login_request.failed_pairing_attempts"
+      ],
+      "reads": [
+        "n|tbl|public.login_request",
+        "n|sch|public"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "login_request",
+        "name": "pairing_code_hash",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "login_request",
+        "name": "failed_pairing_attempts",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "0",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    }
+  ]
+}

@@ -261,6 +261,17 @@ export const runJv = async (
   return await child.exited;
 };
 
+export const approvalPairingCode = (stderr: string): string => {
+  const match =
+    /Enter this pairing code on the approval page: (?<code>[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4})/u.exec(
+      stderr
+    );
+  if (!match?.groups?.code) {
+    throw new Error("No approval pairing code in stderr");
+  }
+  return match.groups.code;
+};
+
 export const approvalRequestId = (stderr: string): string => {
   const match = /Open this link to approve this machine: (?<link>\S+)/u.exec(
     stderr

@@ -35,7 +35,7 @@ Permissions apply to API keys within their scope. A signed-in user has full acce
 
 `reveal` and `inject` are the two permissions that hand out plaintext. `write` can replace or roll back a value without being able to read it. It still lets the key holder change what later commands receive.
 
-A new API key defaults to `read` only. A `jv login` approval suggests `read` and `inject`. The human selects the scope and permissions before approving. Keys can have an expiry of 1 day to 1 year and can be revoked on `/settings/api-keys`. `jv logout` revokes the machine's own key.
+A new API key defaults to `read` only. A `jv login` approval starts with `read` preselected and `inject` opt-in. It requires the pairing code printed in the terminal, never included in the link; deny a request you did not start. Five wrong codes deny the request. Tick `inject` for `jv run`, `jv export` and `jv mcp` (its `run` tool). The human selects the scope and permissions before approving. Keys can have an expiry of 1 day to 1 year and can be revoked on `/settings/api-keys`. `jv logout` revokes the machine's own key.
 
 ## Audit log
 

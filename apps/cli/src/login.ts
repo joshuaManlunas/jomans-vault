@@ -8,6 +8,7 @@ import type { CredentialStore } from "./credentials";
 const openedSchema = z.object({
   id: z.string().min(1),
   pollingSecret: z.string().min(1),
+  pairingCode: z.string().min(1),
   expiresAt: z.iso.datetime(),
 });
 const pollSchema = z.discriminatedUnion("status", [
@@ -117,7 +118,9 @@ export const login = async ({
     openedSchema
   );
   const link = `${url}/cli/authorize?request=${encodeURIComponent(opened.id)}`;
-  console.error(`Open this link to approve this machine: ${link}`);
+  process.stderr.write(
+    `Open this link to approve this machine: ${link}\nEnter this pairing code on the approval page: ${opened.pairingCode}\n`
+  );
   if (!noBrowser) {
     openBrowser(link);
   }
