@@ -53,6 +53,12 @@ The action depends on its audit event being written. Data changes and their even
 
 The owner reads the log at `/audit` in the web app, or through `GET /api/v1/audit` with a user session. API keys cannot read it.
 
+## Login request limits
+
+Opening a CLI login request allows 20 opens per client and 500 globally in a sliding 10-minute window. Exceeding either returns `429`. The global limit provides the storage guarantee even when clients forge addresses. The per-client limit relies on a trusted proxy setting `X-Forwarded-For` or `X-Real-IP`; see the spoofed-IP note below.
+
+Accepted opens delete up to 100 requests that expired more than one hour ago. Requests remain available during that one-hour retention period after expiry, and cleanup never deletes or revokes issued API keys.
+
 ## What the vault does not protect against
 
 - **A compromised server or host.** The server holds the master key and can decrypt values. An attacker controlling it can access plaintext.

@@ -43,8 +43,12 @@ export const startVault = async (): Promise<Vault> => {
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch: (request) =>
-      handler?.(request) ?? new Response("Starting", { status: 503 }),
+    fetch: (request) => {
+      if (!request.headers.has("X-Forwarded-For")) {
+        request.headers.set("X-Forwarded-For", crypto.randomUUID());
+      }
+      return handler?.(request) ?? new Response("Starting", { status: 503 });
+    },
   });
   const url = `http://127.0.0.1:${server.port}`;
   let created = false;

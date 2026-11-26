@@ -8,7 +8,7 @@ import {
 import { apikey } from "@jomans-vault/db/schema/auth";
 import { loginRequest } from "@jomans-vault/db/schema/vault";
 import { ORPCError } from "@orpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import * as z from "zod";
 
 import type { Context } from "../context";
@@ -16,6 +16,12 @@ import { publicProcedure, userProcedure } from "../index";
 import { issueApiKey, permissionsInput, scopeInput } from "./api-keys";
 import { slug } from "./validation";
 
+export const loginRequestWindowMs = 10 * 60 * 1000;
+export const perClientLoginRequestLimit = 20;
+export const globalLoginRequestLimit = 500;
+export const loginRequestGraceMs = 60 * 60 * 1000;
+export const loginRequestCleanupBatch = 100;
+const loginRequestLock = 904_202_601;
 const lifetimeMs = 5 * 60 * 1000;
 const idInput = z.object({ id: z.string() });
 const summaryOutput = z.object({
@@ -92,6 +98,11 @@ const requirePending = (row: LoginRequest) => {
 
 export const loginRequestsRouter = {
   open: publicProcedure
+    .errors({
+      TOO_MANY_REQUESTS: {
+        message: "Too many login requests. Try again later.",
+      },
+    })
     .route({ method: "POST", path: "/login-requests", successStatus: 201 })
     .input(
       z
@@ -111,31 +122,76 @@ export const loginRequestsRouter = {
         expiresAt: z.string(),
       })
     )
-    .handler(async ({ context, input }) => {
+    .handler(async ({ context, input, errors }) => {
       const pollingSecret = Buffer.from(
         crypto.getRandomValues(new Uint8Array(32))
       ).toString("base64url");
-      const createdAt = new Date();
-      const [row] = await context.db
-        .insert(loginRequest)
-        .values({
-          machineName: input.machineName,
-          project: input.project,
-          environment: input.env,
-          pollingSecretHash: await hashSecret(pollingSecret),
-          createdAt,
-          expiresAt: new Date(createdAt.getTime() + lifetimeMs),
-        })
-        .returning();
-      if (!row) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR");
-      }
-      return {
-        id: row.id,
-        pollingSecret,
-        expiresAt: row.expiresAt.toISOString(),
-      };
+      const pollingSecretHash = await hashSecret(pollingSecret);
+      const clientIp = context.ip?.slice(0, 64) ?? null;
+      return await context.db.transaction(async (transaction) => {
+        await transaction.execute(
+          sql`SELECT pg_advisory_xact_lock(${loginRequestLock})`
+        );
+        const createdAt = new Date();
+        const inWindow = gt(
+          loginRequest.createdAt,
+          new Date(createdAt.getTime() - loginRequestWindowMs)
+        );
+        const [globalCount] = await transaction
+          .select({ total: count() })
+          .from(loginRequest)
+          .where(inWindow);
+        const [clientCount] = await transaction
+          .select({ total: count() })
+          .from(loginRequest)
+          .where(
+            and(
+              inWindow,
+              sql`${loginRequest.clientIp} IS NOT DISTINCT FROM ${clientIp}`
+            )
+          );
+        if (
+          (globalCount?.total ?? 0) >= globalLoginRequestLimit ||
+          (clientCount?.total ?? 0) >= perClientLoginRequestLimit
+        ) {
+          throw errors.TOO_MANY_REQUESTS();
+        }
+        const stale = transaction
+          .select({ id: loginRequest.id })
+          .from(loginRequest)
+          .where(
+            lt(
+              loginRequest.expiresAt,
+              new Date(createdAt.getTime() - loginRequestGraceMs)
+            )
+          )
+          .limit(loginRequestCleanupBatch);
+        await transaction
+          .delete(loginRequest)
+          .where(inArray(loginRequest.id, stale));
+        const [row] = await transaction
+          .insert(loginRequest)
+          .values({
+            machineName: input.machineName,
+            project: input.project,
+            environment: input.env,
+            clientIp,
+            pollingSecretHash,
+            createdAt,
+            expiresAt: new Date(createdAt.getTime() + lifetimeMs),
+          })
+          .returning();
+        if (!row) {
+          throw new ORPCError("INTERNAL_SERVER_ERROR");
+        }
+        return {
+          id: row.id,
+          pollingSecret,
+          expiresAt: row.expiresAt.toISOString(),
+        };
+      });
     }),
+
   read: userProcedure
     .route({ method: "GET", path: "/login-requests/{id}" })
     .input(idInput)

@@ -143,20 +143,25 @@ export const auditEvent = pgTable(
   (table) => [index("audit_event_project_id_idx").on(table.projectId)]
 );
 
-export const loginRequest = pgTable("login_request", {
-  id: text("id")
-    .primaryKey()
-    .$defaultFn(() => crypto.randomUUID()),
-  machineName: text("machine_name").notNull(),
-  project: text("project"),
-  environment: text("environment"),
-  pollingSecretHash: text("polling_secret_hash").notNull(),
-  status: text("status").notNull().default("pending"),
-  apiKeyId: text("api_key_id"),
-  keyCiphertext: bytea("key_ciphertext"),
-  keyIv: bytea("key_iv"),
-  wrappedDek: bytea("wrapped_dek"),
-  dekIv: bytea("dek_iv"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  expiresAt: timestamp("expires_at").notNull(),
-});
+export const loginRequest = pgTable(
+  "login_request",
+  {
+    clientIp: text("client_ip"),
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    machineName: text("machine_name").notNull(),
+    project: text("project"),
+    environment: text("environment"),
+    pollingSecretHash: text("polling_secret_hash").notNull(),
+    status: text("status").notNull().default("pending"),
+    apiKeyId: text("api_key_id"),
+    keyCiphertext: bytea("key_ciphertext"),
+    keyIv: bytea("key_iv"),
+    wrappedDek: bytea("wrapped_dek"),
+    dekIv: bytea("dek_iv"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+  },
+  (table) => [index("login_request_created_at_idx").on(table.createdAt)]
+);
