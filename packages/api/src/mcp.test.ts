@@ -5,6 +5,8 @@ import { createAuth } from "@jomans-vault/auth";
 import { createDb } from "@jomans-vault/db";
 import {
   auditEvent,
+  environment,
+  project,
   secret,
   secretVersion,
 } from "@jomans-vault/db/schema/vault";
@@ -50,6 +52,9 @@ const masterKey = btoa(
 const rest = createVaultApiHandler({ db, auth, masterKey });
 const handler = createVaultMcpHandler({ db, auth, masterKey });
 const scope = { projects: { "my-app": ["development", "missing"] } };
+let storedScope: typeof scope & {
+  grants: Record<string, Record<string, string>>;
+};
 const target = { project: "my-app", environment: "development" };
 const secretValue = "private-mcp-test-value";
 const secondValue = "private-second-mcp-value";
@@ -115,7 +120,11 @@ const restRequest = async (
   );
 const createKey = async (permissions: string[], userId = owner.id) =>
   await auth.api.createApiKey({
-    body: { userId, metadata: scope, permissions: { secrets: permissions } },
+    body: {
+      userId,
+      metadata: storedScope,
+      permissions: { secrets: permissions },
+    },
   });
 
 const withClient = async (
@@ -226,6 +235,48 @@ beforeAll(async () => {
       expect(response.status).toBe(200);
     })
   );
+  const missing = await restRequest(
+    "POST",
+    "/projects/my-app/envs",
+    { cookie: owner.cookie },
+    { slug: "missing" }
+  );
+  expect(missing.status).toBe(201);
+  const granted = await db
+    .select({
+      projectId: project.id,
+      slug: environment.slug,
+      id: environment.id,
+    })
+    .from(project)
+    .innerJoin(environment, eq(environment.projectId, project.id))
+    .where(eq(project.ownerId, owner.id));
+  const myProject = await db
+    .select()
+    .from(project)
+    .where(eq(project.slug, "my-app"));
+  const myProjectId = myProject[0]?.id;
+  if (!myProjectId) {
+    throw new Error("Seeded project not found");
+  }
+  storedScope = {
+    ...scope,
+    grants: {
+      [myProjectId]: Object.fromEntries(
+        granted
+          .filter(
+            (row) =>
+              row.projectId === myProjectId &&
+              scope.projects["my-app"].includes(row.slug)
+          )
+          .map((row) => [row.slug, row.id])
+      ),
+    },
+  };
+  const removed = await restRequest("DELETE", "/projects/my-app/envs/missing", {
+    cookie: owner.cookie,
+  });
+  expect(removed.status).toBe(204);
   keys = {
     all: await createKey(["read", "reveal", "inject", "write", "delete"]),
     read: await createKey(["read"]),
