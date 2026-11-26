@@ -37,6 +37,12 @@ Permissions apply to API keys within their scope. A signed-in user has full acce
 
 A new API key defaults to `read` only. A `jv login` approval starts with `read` preselected and `inject` opt-in. It requires the pairing code printed in the terminal, never included in the link; deny a request you did not start. Five wrong codes deny the request. Tick `inject` for `jv run`, `jv export` and `jv mcp` (its `run` tool). The human selects the scope and permissions before approving. Keys can have an expiry of 1 day to 1 year and can be revoked on `/settings/api-keys`. `jv logout` revokes the machine's own key.
 
+## Reserved environment names
+
+Names that control interpreter startup, module loading, dynamic loaders or shell startup are reserved, including command search paths. The exact names and the `DYLD_` prefix are defined in `packages/api/src/reserved-env.ts`. Creating, replacing and rolling back these keys is refused for both API keys and signed-in users.
+
+`jv run` and CLI MCP `run` skip stored reserved names, including values from older servers. `jv run` warns on stderr with the skipped names; MCP `run` reports the warning through `skippedKeys`. The caller's own environment values remain available. `jv export`, the export API and the Varlock plugin still return stored reserved names. Owners can still list, reveal, inspect history and delete them.
+
 ## Audit log
 
 Recorded actions are:
@@ -66,6 +72,7 @@ Accepted opens delete up to 100 requests that expired more than one hour ago. Re
 - **A lost master key.** Every value becomes unrecoverable; keep a copy somewhere safe.
 - **A command leaking its injected environment.** `jv run` is not a security boundary. The command and anything it starts get the values and can print, log or send them. Only run trusted commands under it.
 - **A plaintext permission holder copying values out.** `reveal` and `inject` allow this. The audit log records that access happened, not where the value went.
+- **Changes to ordinary values by a write key.** A `write` key can still change ordinary values that later commands receive. Reserved-name checks do not validate how a command uses those values.
 - **A stolen API key.** It works within its scope and permissions until revoked or expired. Keep it private and revoke it when exposed.
 - **Spoofed audit IP addresses.** The server records the first `X-Forwarded-For` entry, falling back to `X-Real-IP`. These are client-supplied headers unless a trusted proxy sets them; do not treat them as verified identity.
 - **Plain HTTP outside localhost.** `http://` exposes keys and values in transit. Use HTTPS when reaching the vault over a network.

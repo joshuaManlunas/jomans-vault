@@ -948,3 +948,23 @@ test("invalid tool schemas fail safely and master keys are validated at creation
   expect(await snapshot()).toEqual(before);
   expect(() => createVaultMcpHandler({ db, auth, masterKey: "bad" })).toThrow();
 });
+
+test("set_secret refuses reserved names with the policy message and no writes", async () => {
+  const before = await snapshot();
+  await withClient(keys.write.key, async (client) => {
+    const result = await client.callTool({
+      name: "set_secret",
+      arguments: { ...target, key: "NODE_OPTIONS", value: "refused" },
+    });
+    expect(result).toEqual({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "NODE_OPTIONS is reserved because it controls how programs start. Use a different name.",
+        },
+      ],
+    });
+  });
+  expect(await snapshot()).toEqual(before);
+});

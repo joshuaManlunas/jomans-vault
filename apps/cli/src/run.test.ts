@@ -957,6 +957,74 @@ test("export redirects never forward a stored key to another server", async () =
   }
 }, 15_000);
 
+test.each([true, false])(
+  "run filters reserved exports (%s) while preserving caller environment",
+  async (reserved) => {
+    const box = await sandbox();
+    const exported = {
+      FOO: "ordinary-vault-value",
+      ...(reserved
+        ? {
+            NODE_OPTIONS: "--require /tmp/reserved-evil.js",
+            PATH: "/vault-path",
+            DYLD_FALLBACK_LIBRARY_PATH: "/vault-dyld",
+          }
+        : {}),
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json(exported),
+    });
+    const url = `http://127.0.0.1:${server.port}`;
+    try {
+      await writeFile(
+        pathModule.join(box.env.JV_TEST_KEYCHAIN ?? "", "keychain.json"),
+        JSON.stringify({ jv: { [url]: "fake-key" } })
+      );
+      const output = await runJv(
+        [
+          "run",
+          "--project",
+          "my-app",
+          "--env",
+          "development",
+          "--url",
+          url,
+          "--",
+          process.execPath,
+          "-e",
+          "console.log(JSON.stringify([process.env.FOO, process.env.PATH, process.env.NODE_OPTIONS ?? null, process.env.DYLD_FALLBACK_LIBRARY_PATH ?? null])); process.exit(7)",
+        ],
+        box
+      );
+      expect(output.exitCode).toBe(7);
+      expect(JSON.parse(output.stdout)).toEqual([
+        exported.FOO,
+        box.env.PATH,
+        null,
+        null,
+      ]);
+      const skipLine =
+        "Skipped DYLD_FALLBACK_LIBRARY_PATH, NODE_OPTIONS, PATH: reserved names that control how programs start are never injected.";
+      expect(
+        output.stderr.split("\n").filter((line) => line.startsWith("Skipped"))
+      ).toEqual(reserved ? [skipLine] : []);
+      for (const value of Object.values(exported)) {
+        expect(output.stderr).not.toContain(value);
+      }
+      const exportedOutput = await runJv(
+        ["export", "--project", "my-app", "--env", "development", "--url", url],
+        box
+      );
+      expect(exportedOutput.exitCode).toBe(0);
+      expect(JSON.parse(exportedOutput.stdout)).toEqual(exported);
+    } finally {
+      await server.stop(true);
+    }
+  }
+);
+
 test("422 exports report size limits without response bodies or starting a child", async () => {
   const box = await sandbox();
   const key = await authenticate(box);

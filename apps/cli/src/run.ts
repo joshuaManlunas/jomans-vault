@@ -1,5 +1,6 @@
 import { constants } from "node:os";
 
+import { isReservedEnvName } from "@jomans-vault/api/reserved-env";
 import * as z from "zod";
 
 import type { CredentialStore } from "./credentials";
@@ -95,10 +96,19 @@ export const run = async ({
   credentials: CredentialStore;
 }): Promise<number> => {
   const values = await exportValues({ url, project, environment, credentials });
+  const skippedKeys = Object.keys(values).filter(isReservedEnvName).toSorted();
+  const injectedValues = Object.fromEntries(
+    Object.entries(values).filter(([name]) => !isReservedEnvName(name))
+  );
+  if (skippedKeys.length > 0) {
+    console.error(
+      `Skipped ${skippedKeys.join(", ")}: reserved names that control how programs start are never injected.`
+    );
+  }
   let child: Bun.Subprocess<"inherit", "inherit", "inherit">;
   try {
     child = Bun.spawn(command, {
-      env: { ...env, ...values },
+      env: { ...env, ...injectedValues },
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",

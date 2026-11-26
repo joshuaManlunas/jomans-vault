@@ -20,6 +20,7 @@ import { DotenvValueError, formatDotenv } from "../dotenv";
 import { authedProcedure } from "../index";
 import { audit } from "../middleware/audit";
 import { requireScope } from "../middleware/require-scope";
+import { isReservedEnvName, reservedEnvNameMessage } from "../reserved-env";
 import { isUniqueViolation, secretKey, slug } from "./validation";
 
 const EXPORT_MAX_SECRETS = 1000;
@@ -411,6 +412,11 @@ export const secretsRouter = {
     }))
     .use(audit("secret.write", auditTarget))
     .handler(async ({ context, input }) => {
+      if (isReservedEnvName(input.key)) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: reservedEnvNameMessage(input.key),
+        });
+      }
       if (!context.environment) {
         throw new ORPCError("NOT_FOUND");
       }
@@ -488,6 +494,11 @@ export const secretsRouter = {
     }))
     .use(audit("secret.write", auditTarget))
     .handler(async ({ context, input }) => {
+      if (isReservedEnvName(input.key)) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: reservedEnvNameMessage(input.key),
+        });
+      }
       if (!context.environment) {
         throw new ORPCError("NOT_FOUND");
       }
@@ -539,6 +550,11 @@ export const secretsRouter = {
     }))
     .use(audit("secret.rollback", auditTarget))
     .handler(async ({ context, input }) => {
+      if (isReservedEnvName(input.key)) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: reservedEnvNameMessage(input.key),
+        });
+      }
       if (!context.environment) {
         throw new ORPCError("NOT_FOUND");
       }

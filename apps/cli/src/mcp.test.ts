@@ -231,6 +231,7 @@ test("injects values, preserves output and exit status, isolates stdin and keeps
     stdoutTruncated: false,
     stderrTruncated: false,
     timedOut: false,
+    skippedKeys: [],
   });
   expect(output.content).toEqual([
     { type: "text", text: JSON.stringify(output.structuredContent) },
@@ -295,6 +296,7 @@ test("drains capped streams, replaces invalid UTF-8, enforces timeout and report
     stdoutTruncated: true,
     stderrTruncated: true,
     timedOut: false,
+    skippedKeys: [],
     exitCode: 0,
   });
   noLeaks(large);
@@ -361,6 +363,7 @@ console.log('started'); console.error('background');`,
       stdoutTruncated: false,
       stderrTruncated: false,
       timedOut: true,
+      skippedKeys: [],
     });
     expect(Date.now() - started).toBeLessThan(3000);
     const listed = await client.callTool({ name: "list", arguments: {} });
@@ -628,4 +631,59 @@ test("usage rejects invalid arguments before serving and help lists mcp", async 
       );
     })
   );
+});
+
+test("MCP run filters old server exports and set refuses reserved names locally", async () => {
+  const box = await sandbox();
+  let requests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => {
+      requests += 1;
+      return Response.json({
+        FOO: "ordinary-vault-value",
+        NODE_OPTIONS: "--require /tmp/reserved-evil.js",
+        PATH: "/vault-path",
+        DYLD_FALLBACK_LIBRARY_PATH: "/vault-dyld",
+      });
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}`;
+  try {
+    await Bun.write(
+      pathModule.join(box.env.JV_TEST_KEYCHAIN ?? "", "keychain.json"),
+      JSON.stringify({ jv: { [url]: "fake-key" } })
+    );
+    const { client } = await connectMcp(box, [...flags, "--url", url]);
+    const output = await runScript(
+      client,
+      "console.log(JSON.stringify([process.env.FOO, process.env.PATH, process.env.NODE_OPTIONS ?? null, process.env.DYLD_FALLBACK_LIBRARY_PATH ?? null]))"
+    );
+    expect(output.structuredContent).toMatchObject({
+      exitCode: 0,
+      stdout: `${JSON.stringify(["ordinary-vault-value", box.env.PATH, null, null])}\n`,
+      skippedKeys: ["DYLD_FALLBACK_LIBRARY_PATH", "NODE_OPTIONS", "PATH"],
+    });
+    expect(output.content).toEqual([
+      { type: "text", text: JSON.stringify(output.structuredContent) },
+    ]);
+    expect(requests).toBe(1);
+    const rejected = await client.callTool({
+      name: "set",
+      arguments: { key: "NODE_OPTIONS", value: "refused" },
+    });
+    expect(rejected).toEqual({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "NODE_OPTIONS is reserved because it controls how programs start. Use a different name.",
+        },
+      ],
+    });
+    expect(requests).toBe(1);
+  } finally {
+    await server.stop(true);
+  }
 });

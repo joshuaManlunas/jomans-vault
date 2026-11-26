@@ -1073,6 +1073,70 @@ test("write-only rollback restores a key-deleted secret by copying ciphertext wi
   );
 });
 
+test.each(
+  ["NODE_OPTIONS", "DYLD_INSERT_LIBRARIES"].flatMap((name) => [
+    { name, method: "PUT", suffix: "", body: { value: "refused" } },
+    {
+      name,
+      method: "PATCH",
+      suffix: "",
+      body: { value: "refused", expectedVersion: 1 },
+    },
+    { name, method: "POST", suffix: "/rollback", body: { version: 1 } },
+  ])
+)(
+  "$method refuses reserved $name without writes or audit",
+  async ({ name, method, suffix, body }) => {
+    const key = await createKey(["write"]);
+    const before = await snapshotVault();
+    const response = await keyRequest(
+      key.key,
+      `${listPath}/${name}${suffix}`,
+      method,
+      body
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      code: "BAD_REQUEST",
+      message: `${name} is reserved because it controls how programs start. Use a different name.`,
+    });
+    expect(await snapshotVault()).toEqual(before);
+  }
+);
+
+test.each([
+  { method: "GET", suffix: "", permission: "reveal" },
+  { method: "GET", suffix: "/versions", permission: "read" },
+  { method: "DELETE", suffix: "", permission: "delete" },
+])(
+  "$method reserved name path remains valid for $permission",
+  async ({ method, suffix, permission }) => {
+    const key = await createKey([permission]);
+    await expectError(
+      await keyRequest(key.key, `${listPath}/NODE_OPTIONS${suffix}`, method),
+      404,
+      "NOT_FOUND"
+    );
+  }
+);
+
+test("signed-in owner cannot write a reserved name", async () => {
+  const before = await snapshotVault();
+  const response = await request(
+    "PUT",
+    `${listPath}/NODE_OPTIONS`,
+    { cookie: userA.cookie },
+    { value: "refused" }
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({
+    code: "BAD_REQUEST",
+    message:
+      "NODE_OPTIONS is reserved because it controls how programs start. Use a different name.",
+  });
+  expect(await snapshotVault()).toEqual(before);
+});
+
 test("legacy scopes remain visible and revocable but grant no access", async () => {
   const legacyScope = { projects: { "my-app": ["development"] } };
   const key = await createKey(["read"], legacyScope);

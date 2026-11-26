@@ -592,3 +592,39 @@ test.each([
   expect(result.stdout).toContain("printf '%s'");
   noLeaks(result);
 });
+
+test.each(["x", undefined])(
+  "set refuses reserved names before request or prompt (%s)",
+  async (value) => {
+    const box = await sandbox();
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => {
+        requests += 1;
+        return new Response();
+      },
+    });
+    try {
+      const result = await runJv(
+        [
+          "set",
+          "NODE_OPTIONS",
+          ...(value === undefined ? [] : [value]),
+          ...target,
+          "--url",
+          `http://127.0.0.1:${server.port}`,
+        ],
+        box
+      );
+      expect(result.exitCode).toBe(2);
+      expect(stderr(result)).toBe(
+        "NODE_OPTIONS is reserved because it controls how programs start. Use a different name.\n"
+      );
+      expect(requests).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
+  }
+);

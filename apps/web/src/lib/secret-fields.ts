@@ -1,3 +1,7 @@
+import {
+  isReservedEnvName,
+  reservedEnvNameMessage,
+} from "@jomans-vault/api/reserved-env";
 import { secretKey } from "@jomans-vault/api/routers/validation";
 import { z } from "zod";
 
@@ -6,6 +10,12 @@ export const secretKeyField: z.ZodType<string, string> = z
   .superRefine((value, context) => {
     const result = secretKey.safeParse(value);
     if (result.success) {
+      if (isReservedEnvName(value)) {
+        context.addIssue({
+          code: "custom",
+          message: reservedEnvNameMessage(value),
+        });
+      }
       return;
     }
     const [issue] = result.error.issues;
