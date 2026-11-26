@@ -16,6 +16,7 @@ import * as z from "zod";
 import { createContext } from "./context";
 import type { Context } from "./context";
 import type { VaultApiHandler, VaultApiHandlerOptions } from "./handler";
+import { isReservedEnvName, reservedEnvNameMessage } from "./reserved-env";
 import { secretsRouter } from "./routers/secrets";
 import { secretKey, slug } from "./routers/validation";
 
@@ -102,6 +103,17 @@ const createServer = (context: Context): McpServer => {
         );
         return toolResult({ key: result.key, version: result.version });
       } catch (error) {
+        if (
+          error instanceof ORPCError &&
+          error.code === "BAD_REQUEST" &&
+          isReservedEnvName(key) &&
+          error.message === reservedEnvNameMessage(key)
+        ) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: error.message }],
+          };
+        }
         return toolError(error);
       }
     }

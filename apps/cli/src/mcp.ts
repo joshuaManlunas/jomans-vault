@@ -1,5 +1,6 @@
 import { constants } from "node:os";
 
+import { isReservedEnvName } from "@jomans-vault/api/reserved-env";
 import { McpServer } from "@modelcontextprotocol/server";
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
@@ -111,13 +112,19 @@ export const mcp = async ({
       resolved.environment,
       key
     );
+    const skippedKeys = Object.keys(values)
+      .filter(isReservedEnvName)
+      .toSorted();
+    const injectedValues = Object.fromEntries(
+      Object.entries(values).filter(([name]) => !isReservedEnvName(name))
+    );
     if (stopping) {
       throw new Error("Command failed.");
     }
     let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
     try {
       child = Bun.spawn(command, {
-        env: { ...env, ...values },
+        env: { ...env, ...injectedValues },
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
@@ -151,6 +158,7 @@ export const mcp = async ({
         stdoutTruncated: stdout.truncated,
         stderrTruncated: stderr.truncated,
         timedOut,
+        skippedKeys,
       });
     } finally {
       clearTimeout(timer);
@@ -183,6 +191,7 @@ export const mcp = async ({
           stdoutTruncated: z.boolean(),
           stderrTruncated: z.boolean(),
           timedOut: z.boolean(),
+          skippedKeys: z.array(z.string()),
         }),
       },
       async ({ command, timeoutSeconds }) =>

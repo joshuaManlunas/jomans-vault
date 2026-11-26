@@ -1,5 +1,9 @@
 import { readSync } from "node:fs";
 
+import {
+  isReservedEnvName,
+  reservedEnvNameMessage,
+} from "@jomans-vault/api/reserved-env";
 import * as z from "zod";
 
 import type { CredentialStore } from "./credentials";
@@ -49,6 +53,13 @@ const validateKey = (key: string) => {
     throw new UsageError(
       "Invalid secret key. Use 1 to 255 uppercase letters, digits or underscores, starting with a letter or underscore."
     );
+  }
+};
+
+const validateWriteKey = (key: string) => {
+  validateKey(key);
+  if (isReservedEnvName(key)) {
+    throw new UsageError(reservedEnvNameMessage(key));
   }
 };
 
@@ -190,7 +201,7 @@ const readStdin = (): string => {
 };
 
 export const storeSecret = async (target: KeyTarget & { value: string }) => {
-  validateKey(target.key);
+  validateWriteKey(target.key);
   const { value } = target;
   if (!value.isWellFormed()) {
     throw new UsageError("The value is not valid UTF-8 text.");
@@ -210,7 +221,7 @@ export const storeSecret = async (target: KeyTarget & { value: string }) => {
 export const set = async (
   target: KeyTarget & { value?: string }
 ): Promise<number> => {
-  validateKey(target.key);
+  validateWriteKey(target.key);
   let { value } = target;
   if (value === "-") {
     value = readStdin();
