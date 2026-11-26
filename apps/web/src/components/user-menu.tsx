@@ -1,66 +1,102 @@
-import { Button } from "@jomans-vault/ui/components/button";
+import { buttonVariants } from "@jomans-vault/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@jomans-vault/ui/components/dropdown-menu";
 import { Skeleton } from "@jomans-vault/ui/components/skeleton";
-import { useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 
-import { authClient } from "@/lib/auth-client";
+import { getUserInitials } from "@/lib/header";
 
-const UserMenu = () => {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const { data: session, isPending } = authClient.useSession();
+export interface HeaderUser {
+  name: string;
+  email: string;
+}
 
+interface UserMenuProps {
+  user: HeaderUser | null;
+  isPending: boolean;
+  hideSignIn: boolean;
+  onSignOut: () => void;
+}
+
+const UserMenu = ({
+  user,
+  isPending,
+  hideSignIn,
+  onSignOut,
+}: UserMenuProps) => {
   if (isPending) {
-    return <Skeleton className="h-9 w-24" />;
-  }
-
-  if (!session) {
     return (
-      <Link to="/login" search={{ mode: "sign-in" }}>
-        <Button variant="outline">Sign In</Button>
-      </Link>
+      <div className="flex min-w-18 justify-end">
+        <Skeleton className="size-8 rounded-md" />
+      </div>
     );
   }
 
+  if (!user) {
+    if (hideSignIn) {
+      return null;
+    }
+
+    return (
+      <div className="flex min-w-18 justify-end">
+        <Link
+          to="/login"
+          search={{ mode: "sign-in" }}
+          className={buttonVariants({
+            variant: "outline",
+            className: "h-9 rounded-md px-3.5 text-sm",
+          })}
+        >
+          Sign in
+        </Link>
+      </div>
+    );
+  }
+
+  const displayName = user.name.trim() || user.email;
+  const initials = getUserInitials(user.name, user.email);
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="outline" />}>
-        {session.user.name}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent className="bg-card">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>My Account</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem>{session.user.email}</DropdownMenuItem>
-          <DropdownMenuItem
-            variant="destructive"
-            onClick={() => {
-              authClient.signOut({
-                fetchOptions: {
-                  onSuccess: () => {
-                    queryClient.clear();
-                    navigate({
-                      to: "/",
-                    });
-                  },
-                },
-              });
-            }}
+    <div className="hidden min-w-18 justify-end md:flex">
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <button
+              type="button"
+              aria-label={`Account: ${displayName}`}
+              className="group focus-visible:outline-ring grid size-11 cursor-pointer place-items-center outline-none focus-visible:outline-2 focus-visible:-outline-offset-2"
+            />
+          }
+        >
+          <span
+            aria-hidden="true"
+            className="bg-secondary text-foreground group-hover:bg-accent group-aria-expanded:bg-accent grid size-8 place-items-center rounded-md text-xs font-medium transition-colors"
           >
-            Sign Out
+            {initials}
+          </span>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={8} className="w-64">
+          <div className="px-3 py-2.5">
+            <p className="truncate text-sm font-medium">{displayName}</p>
+            <p className="text-muted-foreground truncate text-xs">
+              {user.email}
+            </p>
+          </div>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            className="min-h-10 cursor-pointer px-3 text-sm"
+            onClick={onSignOut}
+          >
+            Sign out
           </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 };
 

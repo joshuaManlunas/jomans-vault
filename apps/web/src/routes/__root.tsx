@@ -21,12 +21,12 @@ export interface RouterAppContext {
 }
 
 const RootDocument = () => (
-  <html lang="en" className="dark">
+  <html lang="en" className="dark scroll-pt-16">
     <head>
       <HeadContent />
     </head>
     <body>
-      <div className="grid h-svh grid-rows-[auto_1fr]">
+      <div className="grid min-h-svh grid-rows-[auto_1fr]">
         <Header />
         <Outlet />
       </div>
