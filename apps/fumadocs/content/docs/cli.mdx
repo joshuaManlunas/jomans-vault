@@ -74,6 +74,8 @@ jv run [--project <p>] [--env <e>] [--url <u>] -- <cmd> [args...]
 
 Fetch the environment's values from `GET /api/v1/projects/{project}/envs/{env}/export` and start the command after `--`. Vault values override matching inherited environment variables. Values are injected into the child process without being written to disk by `jv`.
 
+Exports are limited to 1,000 secrets and 4 MiB of stored values (UTF-8 size plus 16 bytes per value); an over-limit environment fails with a "too large to export" error.
+
 Flags before `--`: `--project`, `--env`, `--url`, `--help`. Arguments after `--` belong to the child command. Required key permission: `inject`, scoped to the project and environment.
 
 ```sh
@@ -87,6 +89,8 @@ jv export [--project <p>] [--env <e>] [--url <u>]
 ```
 
 Print an environment's secret values as a JSON object on stdout. Used by the Varlock `jv()` plugin to resolve all secrets for a schema in one request.
+
+Exports are limited to 1,000 secrets and 4 MiB of stored values (UTF-8 size plus 16 bytes per value); an over-limit environment fails with a "too large to export" error.
 
 Flags: `--project`, `--env`, `--url`, `--help`. Required key permission: `inject`, scoped to the project and environment.
 
