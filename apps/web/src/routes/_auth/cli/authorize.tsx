@@ -1,4 +1,6 @@
 import { Button } from "@jomans-vault/ui/components/button";
+import { Input } from "@jomans-vault/ui/components/input";
+import { Label } from "@jomans-vault/ui/components/label";
 import { Skeleton } from "@jomans-vault/ui/components/skeleton";
 import { ORPCError } from "@orpc/client";
 import { useQuery } from "@tanstack/react-query";
@@ -10,7 +12,11 @@ import {
   ApiKeyScopeField,
   useApiKeyPicker,
 } from "@/components/api-key-access-fields";
-import { buildScope, suggestedSelection } from "@/lib/api-key-form";
+import {
+  buildScope,
+  loginApprovalPermissions,
+  suggestedSelection,
+} from "@/lib/api-key-form";
 import type { permissions } from "@/lib/api-key-form";
 import { dateFormatter } from "@/lib/date-format";
 import { isProjectNotFound, retryProjectQuery } from "@/lib/project-page";
@@ -79,11 +85,13 @@ const LoginRequestForm = ({
   const picker = useApiKeyPicker(userId, true);
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [selectedPermissions, setSelectedPermissions] = useState<Permission[]>([
-    "read",
-    "inject",
+    ...loginApprovalPermissions,
   ]);
   const [scopeErrors, setScopeErrors] = useState<string[]>([]);
   const [permissionErrors, setPermissionErrors] = useState<string[]>([]);
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingErrors, setPairingErrors] = useState<string[]>([]);
+  const pairingInput = useRef<HTMLInputElement>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [action, setAction] = useState<"approve" | "deny" | null>(null);
   const initialized = useRef(false);
@@ -103,22 +111,39 @@ const LoginRequestForm = ({
     setSelected(suggestedSelection(request, owned));
   }, [picker, request]);
 
+  const validateApproval = () => {
+    const missingScope = !Object.values(selected).some(
+      (envs) => envs.length > 0
+    );
+    const missingPermissions = selectedPermissions.length === 0;
+    setScopeErrors(missingScope ? ["Choose at least one environment."] : []);
+    setPermissionErrors(
+      missingPermissions ? ["Choose at least one permission."] : []
+    );
+    const missingPairingCode = pairingCode.trim().length === 0;
+    setPairingErrors(
+      missingPairingCode ? ["Enter the pairing code from your terminal."] : []
+    );
+    if (missingPairingCode) {
+      pairingInput.current?.focus();
+    }
+    if (
+      missingScope ||
+      missingPermissions ||
+      missingPairingCode ||
+      !picker.pickerReady
+    ) {
+      return false;
+    }
+    return true;
+  };
+
   const submit = async (nextAction: "approve" | "deny") => {
     if (pending.current) {
       return;
     }
-    if (nextAction === "approve") {
-      const missingScope = !Object.values(selected).some(
-        (envs) => envs.length > 0
-      );
-      const missingPermissions = selectedPermissions.length === 0;
-      setScopeErrors(missingScope ? ["Choose at least one environment."] : []);
-      setPermissionErrors(
-        missingPermissions ? ["Choose at least one permission."] : []
-      );
-      if (missingScope || missingPermissions || !picker.pickerReady) {
-        return;
-      }
+    if (nextAction === "approve" && !validateApproval()) {
+      return;
     }
     pending.current = true;
     setAction(nextAction);
@@ -129,6 +154,7 @@ const LoginRequestForm = ({
           id: request.id,
           scope: buildScope(selected),
           permissions: selectedPermissions,
+          pairingCode,
         });
         onOutcome("approved-now");
       } else {
@@ -138,6 +164,14 @@ const LoginRequestForm = ({
     } catch (error) {
       if (error instanceof ORPCError && error.code === "CONFLICT") {
         await onConflict();
+      } else if (
+        error instanceof ORPCError &&
+        error.code === "PAIRING_CODE_MISMATCH"
+      ) {
+        setPairingErrors([
+          "That code doesn't match. Check your terminal and try again.",
+        ]);
+        pairingInput.current?.focus();
       } else if (isProjectNotFound(error)) {
         onOutcome("not-found");
       } else {
@@ -196,6 +230,38 @@ const LoginRequestForm = ({
           disabled={action !== null}
           idPrefix="cli-login"
         />
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="cli-login-pairing-code">Pairing code</Label>
+          <Input
+            ref={pairingInput}
+            id="cli-login-pairing-code"
+            required
+            autoComplete="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            className="font-mono"
+            value={pairingCode}
+            onChange={(event) => setPairingCode(event.target.value)}
+            aria-invalid={pairingErrors.length > 0}
+            aria-describedby="cli-login-pairing-help cli-login-pairing-errors"
+          />
+          <p
+            id="cli-login-pairing-help"
+            className="text-muted-foreground text-sm"
+          >
+            Enter the code shown in the terminal where you ran jv login. If
+            someone else sent you this link, deny the request.
+          </p>
+          <div
+            id="cli-login-pairing-errors"
+            role="alert"
+            className="text-destructive text-sm"
+          >
+            {pairingErrors.map((error) => (
+              <p key={error}>{error}</p>
+            ))}
+          </div>
+        </div>
         {submitError && (
           <p role="alert" className="text-destructive">
             {submitError}

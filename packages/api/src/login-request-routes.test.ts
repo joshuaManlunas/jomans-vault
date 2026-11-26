@@ -60,7 +60,12 @@ const summarySchema = z
   })
   .strict();
 const openSchema = z
-  .object({ id: z.string(), pollingSecret: z.string(), expiresAt: z.string() })
+  .object({
+    id: z.string(),
+    pollingSecret: z.string(),
+    pairingCode: z.string(),
+    expiresAt: z.string(),
+  })
   .strict();
 type Opened = z.infer<typeof openSchema>;
 interface TestUser {
@@ -132,12 +137,15 @@ const open = async (
   );
   return openSchema.parse(await response.json());
 };
-const approve = async (id: string, input: Record<string, unknown> = {}) =>
+const approve = async (
+  opened: Pick<Opened, "id" | "pairingCode">,
+  input: Record<string, unknown> = {}
+) =>
   await request(
     "POST",
-    `/login-requests/${id}/approve`,
+    `/login-requests/${opened.id}/approve`,
     { cookie: owner.cookie },
-    { scope, ...input }
+    { scope, pairingCode: opened.pairingCode, ...input }
   );
 const poll = async (opened: Opened) =>
   await request(
@@ -285,6 +293,18 @@ test("anonymous open trims the name, stores only the secret hash, and polls pend
   );
   const row = await storedRequest(opened.id);
   expect(row.machineName).toBe("laptop");
+  expect(opened.pairingCode).toMatch(
+    /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{4}$/u
+  );
+  expect(row.pairingCodeHash).toBe(
+    Buffer.from(
+      await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(opened.pairingCode.replaceAll("-", ""))
+      )
+    ).toString("hex")
+  );
+  expect(row.failedPairingAttempts).toBe(0);
   expect(row.pollingSecretHash).toBe(
     Buffer.from(
       await crypto.subtle.digest(
@@ -373,7 +393,7 @@ test.each([
 
 test("approval defaults to read and inject; the collected key enforces scope and permissions", async () => {
   const opened = await open();
-  const response = await expectStatus(approve(opened.id), 200);
+  const response = await expectStatus(approve(opened), 200);
   const summary = summarySchema.parse(await response.json());
   expect(summary.status).toBe("approved");
   const collected = await collect(opened);
@@ -409,7 +429,7 @@ test("approval defaults to read and inject; the collected key enforces scope and
     )
   );
   await expectError(poll(opened), 409, "CONFLICT");
-  await expectError(approve(opened.id), 409, "CONFLICT");
+  await expectError(approve(opened), 409, "CONFLICT");
   expect(await read(opened.id)).toMatchObject({ status: "approved" });
   await age(opened.id);
   expect(await read(opened.id)).toMatchObject({ status: "approved" });
@@ -423,7 +443,7 @@ test.each([
 ])("approval permission handling %j", async ({ permissions, expected }) => {
   const opened = await open();
   await expectStatus(
-    approve(opened.id, {
+    approve(opened, {
       permissions,
       scope: { projects: { "my-app": ["development", "development"] } },
     }),
@@ -452,7 +472,7 @@ test.each(invalidApprovals)(
     const opened = await open();
     const before = await snapshot();
     const rejected = await expectError(
-      approve(opened.id, input),
+      approve(opened, input),
       400,
       "BAD_REQUEST"
     );
@@ -474,16 +494,20 @@ test.each(invalidApprovals)(
 
 test("approval checks existence and state before scope ownership", async () => {
   const unowned = { scope: { projects: { "other-app": ["development"] } } };
-  await expectError(approve("absent", unowned), 404, "NOT_FOUND");
+  await expectError(
+    approve({ id: "absent", pairingCode: "wrong" }, unowned),
+    404,
+    "NOT_FOUND"
+  );
   const opened = await open();
   await expectStatus(deny(opened.id), 200);
-  await expectError(approve(opened.id, unowned), 409, "CONFLICT");
+  await expectError(approve(opened, unowned), 409, "CONFLICT");
 });
 
 test("concurrent approvals create one key and event; concurrent polls hand out one key", async () => {
   const opened = await open();
   const before = await snapshot();
-  const approvals = await Promise.all([approve(opened.id), approve(opened.id)]);
+  const approvals = await Promise.all([approve(opened), approve(opened)]);
   expect(approvals.map((response) => response.status).toSorted()).toEqual([
     200, 409,
   ]);
@@ -555,7 +579,7 @@ test("denial is final, including after expiry", async () => {
   expect(summarySchema.parse(await denied.json()).status).toBe("denied");
   const before = await snapshot();
   expect(await json(poll(opened))).toEqual({ status: "denied" });
-  await expectError(approve(opened.id), 409, "CONFLICT");
+  await expectError(approve(opened), 409, "CONFLICT");
   await expectError(deny(opened.id), 409, "CONFLICT");
   expect(await snapshot()).toEqual(before);
   await age(opened.id);
@@ -569,12 +593,12 @@ test("pending and approved requests expire, clear ciphertext and never decrypt a
   await age(pending.id);
   const before = await snapshot();
   expect(await read(pending.id)).toMatchObject({ status: "expired" });
-  await expectError(approve(pending.id), 409, "CONFLICT");
+  await expectError(approve(pending), 409, "CONFLICT");
   await expectError(deny(pending.id), 409, "CONFLICT");
   expect(await snapshot()).toEqual(before);
   expect(await json(poll(pending))).toEqual({ status: "expired" });
   const approved = await open();
-  await expectStatus(approve(approved.id), 200);
+  await expectStatus(approve(approved), 200);
   await age(approved.id);
   expect(await read(approved.id)).toMatchObject({ status: "expired" });
   const decrypt = spyOn(crypto.subtle, "decrypt");
@@ -624,7 +648,7 @@ test("read, approve and deny require a user session and ignore API key cookie fa
     ];
     const routes = [
       ["GET", "", undefined],
-      ["POST", "/approve", { scope }],
+      ["POST", "/approve", { scope, pairingCode: opened.pairingCode }],
       ["POST", "/deny", undefined],
     ] as const;
     await Promise.all(
@@ -676,7 +700,7 @@ test.each(["audit_event", "login_request"] as const)(
     await failWrite(table);
     try {
       const body = await expectError(
-        approve(opened.id),
+        approve(opened),
         500,
         "INTERNAL_SERVER_ERROR"
       );
@@ -699,7 +723,7 @@ test("encryption failure removes the issued key and rolls back the audit", async
   );
   try {
     const body = await expectError(
-      approve(opened.id),
+      approve(opened),
       500,
       "INTERNAL_SERVER_ERROR"
     );
@@ -712,7 +736,7 @@ test("encryption failure removes the issued key and rolls back the audit", async
 
 test("stored rows contain neither secret nor key before and after collection", async () => {
   const opened = await open();
-  await expectStatus(approve(opened.id), 200);
+  await expectStatus(approve(opened), 200);
   const row = await storedRequest(opened.id);
   expect(row.keyCiphertext).not.toBeNull();
   expect(row.wrappedDek).not.toBeNull();
@@ -725,7 +749,12 @@ test("stored rows contain neither secret nor key before and after collection", a
   );
   for (const result of [before, after]) {
     const dump = JSON.stringify(result.rows);
-    for (const secret of [key, opened.pollingSecret]) {
+    for (const secret of [
+      key,
+      opened.pollingSecret,
+      opened.pairingCode,
+      opened.pairingCode.replaceAll("-", ""),
+    ]) {
       expect(dump).not.toContain(secret);
       expect(dump).not.toContain(Buffer.from(secret).toString("hex"));
     }
@@ -747,4 +776,118 @@ test("PLAN documents routes, five minutes and one-time collection", async () => 
   expect(plan).toContain("`POST /api/v1/login-requests`");
   expect(plan).toContain("expires after 5 minutes");
   expect(plan).toContain("collected once with the polling secret");
+});
+
+test.each(["typed", "lowercase", "spaces"])(
+  "pairing code approves as %s",
+  async (format) => {
+    const opened = await open();
+    let { pairingCode } = opened;
+    if (format === "lowercase") {
+      pairingCode = pairingCode.toLowerCase().replaceAll("-", "");
+    } else if (format === "spaces") {
+      pairingCode = ` \t${pairingCode.replaceAll("-", " \n")} `;
+    }
+    await expectStatus(approve(opened, { pairingCode }), 200);
+    const { key } = await collect(opened);
+    await expectStatus(request("GET", listPath, { "x-api-key": key }), 200);
+  }
+);
+
+test("wrong pairing code commits only the counter and leaves the request pending", async () => {
+  const opened = await open();
+  const before = await snapshot();
+  await expectError(
+    approve(opened, { pairingCode: "wrong" }),
+    403,
+    "PAIRING_CODE_MISMATCH"
+  );
+  const after = await snapshot();
+  expect(after).toEqual({
+    ...before,
+    requests: before.requests.map((row) =>
+      row.id === opened.id ? { ...row, failedPairingAttempts: 1 } : row
+    ),
+  });
+  expect(await read(opened.id)).toMatchObject({ status: "pending" });
+});
+
+test.each([undefined, " \t\n", 123])(
+  "invalid pairing code %j changes nothing",
+  async (pairingCode) => {
+    const opened = await open();
+    const before = await snapshot();
+    await expectError(approve(opened, { pairingCode }), 400, "BAD_REQUEST");
+    expect(await snapshot()).toEqual(before);
+  }
+);
+
+test("fifth wrong code denies and prevents any later decision", async () => {
+  const opened = await open();
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- Verify each committed attempt and the final lockout.
+    await expectError(
+      approve(opened, { pairingCode: "wrong" }),
+      attempt === 5 ? 409 : 403,
+      attempt === 5 ? "CONFLICT" : "PAIRING_CODE_MISMATCH"
+    );
+  }
+  expect(await storedRequest(opened.id)).toMatchObject({
+    status: "denied",
+    failedPairingAttempts: 5,
+  });
+  await expectError(approve(opened), 409, "CONFLICT");
+  await expectError(deny(opened.id), 409, "CONFLICT");
+  expect(await json(poll(opened))).toEqual({ status: "denied" });
+});
+
+test("legacy requests without a pairing hash cannot approve", async () => {
+  const opened = await open();
+  await db
+    .update(loginRequest)
+    .set({ pairingCodeHash: null })
+    .where(eq(loginRequest.id, opened.id));
+  const before = await snapshot();
+  await expectError(approve(opened), 403, "PAIRING_CODE_MISMATCH");
+  const after = await snapshot();
+  expect(after.keys).toEqual(before.keys);
+  expect(after.audit).toEqual(before.audit);
+  expect(await storedRequest(opened.id)).toMatchObject({
+    status: "pending",
+    failedPairingAttempts: 1,
+  });
+});
+
+test("concurrent wrong pairing codes count exactly and deny at five", async () => {
+  const opened = await open();
+  const before = await snapshot();
+  const responses = await Promise.all(
+    Array.from(
+      { length: 5 },
+      async () => await approve(opened, { pairingCode: "wrong" })
+    )
+  );
+  expect(responses.map((response) => response.status).toSorted()).toEqual([
+    403, 403, 403, 403, 409,
+  ]);
+  expect(await storedRequest(opened.id)).toMatchObject({
+    status: "denied",
+    failedPairingAttempts: 5,
+  });
+  const after = await snapshot();
+  expect(after.keys).toEqual(before.keys);
+  expect(after.audit).toEqual(before.audit);
+});
+
+test("read-only login approval cannot export values", async () => {
+  const opened = await open();
+  await expectStatus(approve(opened, { permissions: ["read"] }), 200);
+  const { key } = await collect(opened);
+  await expectError(
+    request("GET", "/projects/my-app/envs/development/export", {
+      "x-api-key": key,
+    }),
+    403,
+    "FORBIDDEN"
+  );
 });

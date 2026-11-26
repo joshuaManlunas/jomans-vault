@@ -1,6 +1,11 @@
 import { expect } from "bun:test";
 
-import { approvalRequestId, spawnJv, startVault } from "./harness";
+import {
+  approvalPairingCode,
+  approvalRequestId,
+  spawnJv,
+  startVault,
+} from "./harness";
 import type { JvResult, Sandbox } from "./harness";
 
 export const secretValues = {
@@ -70,12 +75,16 @@ export const startExportFixture = async () => {
         const id = approvalRequestId(
           await child.waitForStderr(/Open this link/u)
         );
+        const pairingCode = approvalPairingCode(
+          await child.waitForStderr(/Enter this pairing code/u)
+        );
         const approved = await vault.api(
           "POST",
           `/login-requests/${id}/approve`,
           {
             cookie,
             body: {
+              pairingCode,
               scope: {
                 projects: { "my-app": ["development", "staging", "empty"] },
               },

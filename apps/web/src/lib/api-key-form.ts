@@ -49,3 +49,5 @@ export const suggestedSelection = (
   }
   return {};
 };
+
+export const loginApprovalPermissions = ["read"] as const;

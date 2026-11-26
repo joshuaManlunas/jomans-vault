@@ -16,6 +16,7 @@ import { loginRequest } from "@jomans-vault/db/schema/vault";
 import { eq } from "drizzle-orm";
 
 import {
+  approvalPairingCode,
   approvalRequestId,
   createSandbox,
   runJv,
@@ -69,9 +70,12 @@ const authenticate = async (
 ) => {
   const child = spawn(["login", "--no-browser", "--url", vault.url], box);
   const id = approvalRequestId(await child.waitForStderr(/Open this link/u));
+  const pairingCode = approvalPairingCode(
+    await child.waitForStderr(/Enter this pairing code/u)
+  );
   const approved = await vault.api("POST", `/login-requests/${id}/approve`, {
     cookie,
-    body: { scope: keyScope, permissions },
+    body: { scope: keyScope, permissions, pairingCode },
   });
   expect(approved.status).toBe(200);
   const output = await child.waitForExit();

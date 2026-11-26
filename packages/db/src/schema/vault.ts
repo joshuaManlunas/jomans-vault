@@ -151,6 +151,10 @@ export const loginRequest = pgTable("login_request", {
   project: text("project"),
   environment: text("environment"),
   pollingSecretHash: text("polling_secret_hash").notNull(),
+  pairingCodeHash: text("pairing_code_hash"),
+  failedPairingAttempts: integer("failed_pairing_attempts")
+    .notNull()
+    .default(0),
   status: text("status").notNull().default("pending"),
   apiKeyId: text("api_key_id"),
   keyCiphertext: bytea("key_ciphertext"),

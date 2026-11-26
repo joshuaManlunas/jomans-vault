@@ -4,6 +4,7 @@ import {
   apiKeyStatus,
   buildScope,
   expiryPresets,
+  loginApprovalPermissions,
   suggestedSelection,
 } from "./api-key-form";
 
@@ -84,4 +85,8 @@ test("suggested selection only ticks an owned environment", () => {
       expected
     );
   }
+});
+
+test("login approval starts with read only", () => {
+  expect(loginApprovalPermissions).toEqual(["read"]);
 });

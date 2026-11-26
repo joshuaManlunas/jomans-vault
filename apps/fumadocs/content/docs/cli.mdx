@@ -32,7 +32,9 @@ Log this machine in to a vault. Opens `<url>/cli/authorize?request=<id>` in a br
 
 Flags: `--url`, `--project`, `--env`, `--no-browser`, `--help`. Project and environment pre-fill the approval scope; an environment requires a project. `--no-browser` prints the approval link without opening it.
 
-Required key permission: none. The approval page grants the new key's scope and permissions.
+The terminal prints a pairing code to enter on the approval page; the code is never part of the link. Deny the request if you didn't start it. Five wrong codes deny the request.
+
+Required key permission: none. The approval page starts with `read` only. Tick `inject` when approving a machine that will use `jv run`, `jv export` or `jv mcp` (its `run` tool); these commands need `inject`. The approval page grants the new key's scope and permissions.
 
 ```sh
 jv login --url https://vault.example.com --project my-app --env development
