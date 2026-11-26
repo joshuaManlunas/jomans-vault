@@ -44,6 +44,11 @@ export const fetchValues = async (
       `Project ${project} or environment ${environment} not found at ${url}.`
     );
   }
+  if (response.status === 422) {
+    throw new Error(
+      `${project}/${environment} at ${url} is too large to export (limits: 1000 secrets, 4 MiB of values).`
+    );
+  }
   try {
     if (response.ok) {
       return exportSchema.parse(JSON.parse(body));
