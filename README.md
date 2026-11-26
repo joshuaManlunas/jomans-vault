@@ -98,7 +98,7 @@ Run standalone Node/Bun tools that use Varlock from the owning app directory so 
 - Config: `docker-compose.yml` (app Dockerfiles live in `apps/*/Dockerfile`)
 - Build images: bun run docker:build
 - Start: bun run docker:up
-- Start (production): `bun run docker:up:prod` — Postgres gets no host port
+- Start (production): `bun run docker:up:prod` — web publishes on `127.0.0.1:3001` only; Postgres gets no host port
 - Logs: bun run docker:logs
 - Stop: bun run docker:down
 
@@ -142,7 +142,7 @@ jomans-vault/
 - `bun run check`: Run Oxlint and Oxfmt
 - `bun run docker:build`: Build the Docker Compose images
 - `bun run docker:up`: Build and start the Docker Compose stack
-- `bun run docker:up:prod`: Build and start the production stack without a Postgres host port
+- `bun run docker:up:prod`: Build and start the production stack with web published on `127.0.0.1:3001` only and no Postgres host port
 - `bun run docker:logs`: Tail logs from the Docker Compose stack
 - `bun run docker:down`: Stop the Docker Compose stack
 

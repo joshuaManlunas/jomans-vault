@@ -104,13 +104,28 @@ test("production removes Postgres host ports", () => {
   expect(postgres.ports ?? []).toEqual([]);
 });
 
-test("production web keeps its port and database network connection", () => {
+test("local web keeps its all-interfaces port", () => {
+  const result = resolveConfig("docker:up", "web");
+  expect(result.exitCode).toBe(0);
+  const { web } = JSON.parse(result.stdout.toString()).services;
+  expect(web.ports).toEqual([
+    { mode: "ingress", published: "3001", target: 3001, protocol: "tcp" },
+  ]);
+});
+
+test("production web binds loopback and keeps its database network connection", () => {
   const result = resolveConfig("docker:up:prod", "web");
   expect(result.exitCode).toBe(0);
   const { web } = JSON.parse(result.stdout.toString()).services;
-  expect(web.ports).toContainEqual(
-    expect.objectContaining({ published: "3001", target: 3001 })
-  );
+  expect(web.ports).toEqual([
+    {
+      mode: "ingress",
+      host_ip: "127.0.0.1",
+      published: "3001",
+      target: 3001,
+      protocol: "tcp",
+    },
+  ]);
   const database = new URL(web.environment.DATABASE_URL);
   expect(database.hostname).toBe("postgres");
   expect(database.port).toBe("5432");
