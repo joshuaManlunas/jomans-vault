@@ -46,6 +46,11 @@ const post = async <T>(
   } catch {
     // Invalid JSON and invalid response shapes are unexpected responses.
   }
+  if (path === "/login-requests" && response.status === 429) {
+    throw new Error(
+      `Too many login requests to the vault at ${url}. Try again later.`
+    );
+  }
   throw new Error(
     `The vault at ${url} returned an unexpected response (${response.status}).`
   );

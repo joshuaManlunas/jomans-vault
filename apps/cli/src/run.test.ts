@@ -956,3 +956,62 @@ test("export redirects never forward a stored key to another server", async () =
     await Promise.all([target.stop(true), source.stop(true)]);
   }
 }, 15_000);
+
+test("422 exports report size limits without response bodies or starting a child", async () => {
+  const box = await sandbox();
+  const key = await authenticate(box);
+  const bodyMarker = "PRIVATE_TOO_LARGE_BODY";
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(bodyMarker, { status: 422 }),
+  });
+  const url = `http://127.0.0.1:${server.port}`;
+  const dir = pathModule.join(box.cwd, crypto.randomUUID());
+  await mkdir(pathModule.join(dir, "keychain"), { recursive: true });
+  await writeFile(
+    pathModule.join(dir, "keychain/keychain.json"),
+    JSON.stringify({ jv: { [url]: key } })
+  );
+  const marker = pathModule.join(dir, "started");
+  try {
+    await Promise.all(
+      ["run", "export"].map(async (command) => {
+        const args = [
+          command,
+          "--project",
+          "my-app",
+          "--env",
+          "development",
+          "--url",
+          url,
+        ];
+        if (command === "run") {
+          args.push(
+            "--",
+            process.execPath,
+            "-e",
+            `await Bun.write(${JSON.stringify(marker)}, "started")`
+          );
+        }
+        const output = await runJv(args, {
+          cwd: dir,
+          env: {
+            ...box.env,
+            JV_TEST_KEYCHAIN: pathModule.join(dir, "keychain"),
+          },
+        });
+        expect(output.exitCode).toBe(1);
+        expect(output.stderr).toContain(
+          `my-app/development at ${url} is too large to export (limits: 1000 secrets, 4 MiB of values).`
+        );
+        expect(output.stderr).not.toContain(bodyMarker);
+        expect(output.stdout).not.toContain(bodyMarker);
+        expect(await Bun.file(marker).exists()).toBe(false);
+        noLeaks(output);
+      })
+    );
+  } finally {
+    await server.stop(true);
+  }
+}, 15_000);

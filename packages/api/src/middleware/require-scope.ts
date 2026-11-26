@@ -26,16 +26,16 @@ export const requireScope = o
     if (!ownedProject) {
       throw new ORPCError("NOT_FOUND");
     }
-    if (principal.type === "apiKey") {
-      if (!Object.hasOwn(principal.scope.projects, input.project)) {
-        throw new ORPCError("FORBIDDEN");
-      }
-      if (
-        input.env === undefined ||
-        !principal.scope.projects[input.project]?.includes(input.env)
-      ) {
-        throw new ORPCError("FORBIDDEN");
-      }
+    if (
+      principal.type === "apiKey" &&
+      (input.env === undefined ||
+        !Object.hasOwn(principal.scope.grants, ownedProject.id) ||
+        !Object.hasOwn(
+          principal.scope.grants[ownedProject.id] ?? {},
+          input.env
+        ))
+    ) {
+      throw new ORPCError("FORBIDDEN");
     }
     let scopedEnvironment = null;
     if (input.env !== undefined) {
@@ -50,6 +50,12 @@ export const requireScope = o
         );
       if (!found) {
         throw new ORPCError("NOT_FOUND");
+      }
+      if (
+        principal.type === "apiKey" &&
+        principal.scope.grants[ownedProject.id]?.[input.env] !== found.id
+      ) {
+        throw new ORPCError("FORBIDDEN");
       }
       scopedEnvironment = found;
     }

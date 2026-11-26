@@ -4,7 +4,12 @@ import { ORPCError } from "@orpc/server";
 import { and, desc, eq, sql } from "drizzle-orm";
 import * as z from "zod";
 
-import type { Context, KeyPermission, Principal } from "../context";
+import type {
+  ApiKeyScope,
+  Context,
+  KeyPermission,
+  Principal,
+} from "../context";
 import { authedProcedure, userProcedure } from "../index";
 import { recordAuditEvent } from "../middleware/audit";
 import { slug } from "./validation";
@@ -61,19 +66,27 @@ export const issueApiKey = async (
 ) => {
   const userId = context.principal.user.id;
   const ownedEnvironments = await db
-    .select({ project: project.slug, environment: environment.slug })
+    .select({
+      project: project.slug,
+      projectId: project.id,
+      environment: environment.slug,
+      environmentId: environment.id,
+    })
     .from(project)
     .innerJoin(environment, eq(environment.projectId, project.id))
     .where(eq(project.ownerId, userId));
+  const grants: ApiKeyScope["grants"] = {};
   for (const [projectSlug, envs] of Object.entries(input.scope.projects)) {
-    if (
-      !envs.every((env) =>
-        ownedEnvironments.some(
-          (row) => row.project === projectSlug && row.environment === env
-        )
-      )
-    ) {
-      throw new ORPCError("BAD_REQUEST");
+    for (const env of envs) {
+      const owned = ownedEnvironments.find(
+        (row) => row.project === projectSlug && row.environment === env
+      );
+      if (!owned) {
+        throw new ORPCError("BAD_REQUEST");
+      }
+      const projectGrants = grants[owned.projectId] ?? {};
+      projectGrants[env] = owned.environmentId;
+      grants[owned.projectId] = projectGrants;
     }
   }
   const created = await context.auth.api.createApiKey({
@@ -81,7 +94,7 @@ export const issueApiKey = async (
       userId,
       name: input.name,
       ...(input.expiresIn === undefined ? {} : { expiresIn: input.expiresIn }),
-      metadata: input.scope,
+      metadata: { projects: input.scope.projects, grants },
       permissions: { secrets: input.permissions },
     },
   });

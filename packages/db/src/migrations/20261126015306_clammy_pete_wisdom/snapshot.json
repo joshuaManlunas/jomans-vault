@@ -1,0 +1,91 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "321a130a-bca3-41b7-a8ab-a5d36d545352",
+  "prevIds": [
+    "c3886bc0-54d1-4a46-b697-dfc079739516"
+  ],
+  "footprints": [
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "login_request",
+        "client_ip"
+      ],
+      "writes": [
+        "s|col|public.login_request.client_ip",
+        "n|col|public.login_request.client_ip",
+        "e|col|public.login_request.client_ip"
+      ],
+      "reads": [
+        "n|tbl|public.login_request",
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "login_request",
+        "login_request_created_at_idx"
+      ],
+      "writes": [
+        "s|idx|public.login_request_created_at_idx",
+        "n|idx|public.login_request_created_at_idx",
+        "e|idx|public.login_request_created_at_idx",
+        "n|rel|public.login_request_created_at_idx"
+      ],
+      "reads": [
+        "n|tbl|public.login_request",
+        "n|sch|public",
+        "n|col|public.login_request.created_at"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "login_request",
+        "name": "client_ip",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "login_request",
+        "name": "login_request_created_at_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "created_at",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    }
+  ]
+}

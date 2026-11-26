@@ -5,7 +5,7 @@ import * as z from "zod";
 export type KeyPermission = "read" | "reveal" | "inject" | "write" | "delete";
 
 export interface ApiKeyScope {
-  projects: Record<string, string[]>;
+  grants: Record<string, Record<string, string>>;
 }
 
 export type Principal =
@@ -26,7 +26,7 @@ export const principalActor = (
 });
 
 const scopeSchema = z.object({
-  projects: z.record(z.string(), z.array(z.string())),
+  grants: z.record(z.string(), z.record(z.string(), z.string())),
 });
 const permissionsSchema = z.object({ secrets: z.array(z.unknown()) });
 const isKeyPermission = (value: unknown): value is KeyPermission =>
@@ -61,7 +61,7 @@ const authenticate = async (
         type: "apiKey",
         keyId: result.key.id,
         userId: result.key.referenceId,
-        scope: scope.success ? scope.data : { projects: {} },
+        scope: scope.success ? scope.data : { grants: {} },
         permissions: permissions.success
           ? permissions.data.secrets.filter(isKeyPermission)
           : [],

@@ -76,7 +76,7 @@ Every procedure declares `.route({ method, path })` so it appears in the OpenAPI
 | Bulk export | `GET …/envs/{env}/export?format=dotenv\|json` | What the CLI and Varlock plugin use to inject a whole environment in one call. Returns plaintext, so it requires the `inject` permission. Audited as `secret.export`. Dotenv output is promised to round-trip only through the `dotenv` npm package (17.4.2); a value it cannot carry returns 422 naming the key, and JSON always works. |
 | History / rollback | `GET …/secrets/{key}/versions`, `POST …/secrets/{key}/rollback` | Rollback takes `{ version }` |
 | Projects / envs | CRUD under `/api/v1/projects` | Human sessions by default (see §3) |
-| CLI login requests | `POST /api/v1/login-requests`; read, approve, deny and poll under `/api/v1/login-requests/{id}` | Open and poll without sign-in; read, approve and deny require a user session |
+| CLI login requests | `POST /api/v1/login-requests`; read, approve, deny and poll under `/api/v1/login-requests/{id}` | Open and poll without sign-in; opening returns `429` when rate-limited; read, approve and deny require a user session |
 | Revoke current API key | `POST /api/v1/api-keys/current/revoke` | API key only; revokes the authenticating key and audits it as the actor |
 | List audit events | `GET /api/v1/audit` | Signed-in users only. Newest first, cursor paging, optional project and actor filters |
 
